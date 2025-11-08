@@ -298,9 +298,9 @@ send_current_traffic() {
         echo "$(date '+%Y-%m-%d %H:%M:%S') : 获取流量失败，无法发送" | tee -a "$CRON_LOG"
         return 1
     fi
-
+    local current_time=$(date '+%Y-%m-%d %H:%M:%S')
     local url="https://api.telegram.org/bot${BOT_TOKEN}/sendMessage"
-    local message="📊 [${MACHINE_NAME}]当前流量使用: ${current_usage} GB"
+    local message="📊 [${MACHINE_NAME}] 当前流量使用 (${current_time}): ${current_usage} GB"
     local response=$(curl -s -X POST "$url" -d "chat_id=$CHAT_ID" -d "text=$message")
     if echo "$response" | grep -q '"ok":true'; then
         echo "$(date '+%Y-%m-%d %H:%M:%S') : 当前流量发送成功" | tee -a "$CRON_LOG"
@@ -310,6 +310,7 @@ send_current_traffic() {
         return 1
     fi
 }
+
 # 主任务
 main() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') : 进入主任务" >> "$CRON_LOG"
