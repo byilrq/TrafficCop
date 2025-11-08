@@ -391,23 +391,29 @@ daily_report() {
         limit="未知"
     fi
 
-# === 计算到期剩余天数 ===
+# === 计算到期剩余天数（增强版） ===
 local today=$(date '+%Y-%m-%d')
 local expire_formatted=$(echo "$EXPIRE_DATE" | tr '.' '-')
-local expire_ts=$(date -d "$expire_formatted" +%s 2>/dev/null)
-local today_ts=$(date -d "$today" +%s)
-local diff_days=$(( (expire_ts - today_ts) / 86400 ))
+local expire_ts=$(date -d "${expire_formatted} 00:00:00" +%s 2>/dev/null)
+local today_ts=$(date -d "${today} 00:00:00" +%s 2>/dev/null)
 
-if (( diff_days < 0 )); then
-    diff_days="已过期"
-    diff_emoji="🔴"
-elif (( diff_days <= 30 )); then
-    diff_emoji="🟡"
-    diff_days="${diff_days}天 (即将到期)"
+if [[ -z "$expire_ts" || -z "$today_ts" ]]; then
+    diff_days="未知"
+    diff_emoji="⚫"
 else
-    diff_emoji="🟢"
-    diff_days="${diff_days}天"
+    local diff_days=$(( (expire_ts - today_ts) / 86400 ))
+    if (( diff_days < 0 )); then
+        diff_days="已过期"
+        diff_emoji="🔴"
+    elif (( diff_days <= 30 )); then
+        diff_emoji="🟡"
+        diff_days="${diff_days}天 (即将到期)"
+    else
+        diff_emoji="🟢"
+        diff_days="${diff_days}天"
+    fi
 fi
+
 
     # === 构建美化消息 ===
     local message="🌐 [${MACHINE_NAME}] 每日流量报告%0A%0A"
