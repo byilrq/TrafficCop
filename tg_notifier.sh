@@ -402,10 +402,10 @@ if [[ -z "$expire_ts" || -z "$today_ts" ]]; then
     diff_emoji="⚫"
 else
     local diff_days=$(( (expire_ts - today_ts) / 86400 ))
-    if (( diff_days < 0 )); then
+    if (( diff_days < 30 )); then
         diff_days="已过期"
         diff_emoji="🔴"
-    elif (( diff_days <= 30 )); then
+    elif (( diff_days <= 60 )); then
         diff_emoji="🟡"
         diff_days="${diff_days}天 (即将到期)"
     else
@@ -416,13 +416,12 @@ fi
 
 
     # === 构建美化消息 ===
-    local message="🌐 [${MACHINE_NAME}] 每日流量报告%0A%0A"
-    message+="🖥️ VPS流量信息：%0A"
+    local message="🖥️ [${MACHINE_NAME}] 每日报告%0A%0A"
     message+="🕒推送日期：$(date '+%Y-%m-%d')%0A"
     message+="${diff_emoji}剩余天数：${diff_days}%0A"
     message+="📅当前周期: ${period}%0A"
     message+="⌛已用流量: ${usage} GB%0A"
-    message+="📦流量套餐：${limit}"
+    message+="🌐流量套餐：${limit}"
 
     # === 推送 Telegram ===
     curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
@@ -486,6 +485,34 @@ send_current_traffic() {
     fi
 }
 
+#停止推送
+tgpush_stop() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') : 开始停止 Telegram 推送功能。" | tee -a "$CRON_LOG"
+    
+    # 移除 Crontab 定时任务
+    if crontab -l | grep -q "$SCRIPT_PATH"; then
+        crontab -l | grep -v "$SCRIPT_PATH" | crontab -
+        echo "$(date '+%Y-%m-%d %H:%M:%S') : ✅ Crontab 定时任务已移除。" | tee -a "$CRON_LOG"
+    else
+        echo "$(date '+%Y-%m-%d %H:%M:%S') : ℹ️ 无需移除 Crontab 任务（未找到相关条目）。" | tee -a "$CRON_LOG"
+    fi
+    
+    # 可选：删除配置文件以防止进一步运行（如果需要完全禁用）
+    # if [ -f "$CONFIG_FILE" ]; then
+    #     rm -f "$CONFIG_FILE"
+    #     echo "$(date '+%Y-%m-%d %H:%M:%S') : ✅ 配置文件已删除。" | tee -a "$CRON_LOG"
+    # fi
+    
+    # 可选：删除日志文件（如果需要清理）
+    # if [ -f "$CRON_LOG" ]; then
+    #     rm -f "$CRON_LOG"
+    #     echo "$(date '+%Y-%m-%d %H:%M:%S') : ✅ 日志文件已删除。" | tee -a "$CRON_LOG"
+    # fi
+    
+    echo "$(date '+%Y-%m-%d %H:%M:%S') : ✅ Telegram 推送功能已停止。" | tee -a "$CRON_LOG"
+    exit 0
+}
+
 # 主任务
 main() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') : 进入主任务" >> "$CRON_LOG"
@@ -542,9 +569,9 @@ if [[ "$*" == *"-cron"* ]]; then
             echo "2. 发送测试消息"
             echo "3. 重新加载配置"
             echo "4. 修改配置"
-            echo "5. 修改每日报告时间"
-            echo "6. 实时查询并推送当前流量"
-            echo "7. 实时查询当前流量"
+            echo "5. 实时查询并推送当前流量"
+            echo "6. 实时查询当前流量"
+            echo "7. 停止推送"
             echo "0. 退出"
             echo "======================================"
             echo -n "请选择操作 [0-6]: "
@@ -575,34 +602,19 @@ if [[ "$*" == *"-cron"* ]]; then
                     initial_config
                     ;;
                 5)
-                    echo "修改每日报告时间"
-                    echo -n "请输入新的每日报告时间 (HH:MM): "
-                    read -r new_time
-                    if [[ $new_time =~ ^([0-1][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
-                        # 直接使用命令行工具修改配置，避免交互环境问题
-                        cp "$CONFIG_FILE" "$CONFIG_FILE.backup"
-                        awk -v new_time="$new_time" '
-                        /^DAILY_REPORT_TIME=/ { print "DAILY_REPORT_TIME=" new_time; next }
-                        { print }
-                        ' "$CONFIG_FILE.backup" > "$CONFIG_FILE"
-                       
-                        echo "每日报告时间已更新为 $new_time"
-                        # 更新 cron 任务
-                        update_cron_time "$new_time"
-                    else
-                        echo "无效的时间格式。请使用 HH:MM 格式 (如: 09:30)"
-                    fi
-                    ;;
-                6)
                     echo "正在实时查询并推送当前流量..."
                     send_current_traffic
                     ;;
-                7)
+                6)
                     echo "正在实时查询并推送当前流量..."
                     get_current_traffic
                     ;;
+               6)
+                    echo "正在停止tg推送..."
+                    tgpush_stop
+                    ;;         
                 *)
-                    echo "无效的选择，请输入 0-6"
+                    echo "无效的选择，请输入 0-7"
                     ;;
             esac
            
