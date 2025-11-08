@@ -153,11 +153,11 @@ if [[ -z "$expire_ts" || -z "$today_ts" ]]; then
 else
     local diff_days=$(( (expire_ts - today_ts) / 86400 ))
     if (( diff_days < 30 )); then
-        diff_days="已过期"
+        diff_days="(即将到期)"
         diff_emoji="🔴"
     elif (( diff_days <= 60 )); then
         diff_emoji="🟡"
-        diff_days="${diff_days}天 (即将到期)"
+        diff_days="${diff_days}天"
     else
         diff_emoji="🟢"
         diff_days="${diff_days}天"
