@@ -91,6 +91,7 @@ MACHINE_NAME="$MACHINE_NAME"
 EOF
     echo "配置已保存到 $CONFIG_FILE"
 }
+
 # 初始配置
 initial_config() {
     echo "======================================"
@@ -180,6 +181,8 @@ initial_config() {
     echo ""
     read_config
 }
+
+# 设置测试通知消息
 test_telegram_notification() {
     local message="🔔 [${MACHINE_NAME}]这是一条测试消息。如果您收到这条消息，说明Telegram通知功能正常工作。"
     local response
@@ -217,6 +220,7 @@ $correct_entry"
     echo "当前的 crontab 内容："
     crontab -l
 }
+
 # 更新cron任务中的时间（当修改每日报告时间时调用）
 update_cron_time() {
     local new_time="$1"
@@ -231,26 +235,29 @@ update_cron_time() {
     echo "cron任务时间已更新"
 }
 # 每日报告
+# 每日报告
 daily_report() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') : 开始生成每日报告"| tee -a "$CRON_LOG"
     echo "$(date '+%Y-%m-%d %H:%M:%S') : DAILY_REPORT_TIME=$DAILY_REPORT_TIME"| tee -a "$CRON_LOG"
     echo "$(date '+%Y-%m-%d %H:%M:%S') : BOT_TOKEN=${BOT_TOKEN:0:5}... CHAT_ID=$CHAT_ID"| tee -a "$CRON_LOG"
     echo "$(date '+%Y-%m-%d %H:%M:%S') : 日志文件路径: $LOG_FILE"| tee -a "$CRON_LOG"
-    # 反向读取日志文件，查找第一个同时包含"当前使用流量"和"限制流量"的行
-    local usage_line=$(tac "$LOG_FILE" | grep -m 1 -E "当前使用流量:.*限制流量:")
-    if [[ -z "$usage_line" ]]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : 无法在日志中找到同时包含当前使用流量和限制流量的行"| tee -a "$CRON_LOG"
+    # 先执行 get_current_traffic 获取最新数据（它会打印周期、模式和使用量）
+    local current_usage=$(get_current_traffic)
+    if [ $? -ne 0 ]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') : 获取最新流量失败，无法生成报告"| tee -a "$CRON_LOG"
         return 1
     fi
-    local current_usage=$(echo "$usage_line" | grep -oP '当前使用流量:\s*\K[0-9.]+ [GBMKgbmk]+')
-    local limit=$(echo "$usage_line" | grep -oP '限制流量:\s*\K[0-9.]+ [GBMKgbmk]+')
-    if [[ -z "$current_usage" || -z "$limit" ]]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : 无法从行中提取流量信息"| tee -a "$CRON_LOG"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : 问题行: $usage_line"| tee -a "$CRON_LOG"
-        return 1
+    # 获取限制流量（从配置计算阈值）
+    if source "$WORK_DIR/trafficcop.sh" >/dev/null 2>&1 && read_config; then
+        local limit_threshold=$(echo "$TRAFFIC_LIMIT - $TRAFFIC_TOLERANCE" | bc 2>/dev/null || echo "0")
+        local limit="$limit_threshold GB"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') : 限制流量: $limit" | tee -a "$CRON_LOG"
+    else
+        echo "$(date '+%Y-%m-%d %H:%M:%S') : 配置加载失败，无法获取限制流量" | tee -a "$CRON_LOG"
+        local limit="未知"
     fi
     # 构建基础消息
-    local message="📊 [${MACHINE_NAME}]每日流量报告%0A%0A🖥️ 机器总流量：%0A当前使用：$current_usage%0A流量限制：$limit"
+    local message="📊 [${MACHINE_NAME}]每日流量报告%0A%0A🖥️ 机器总流量：%0A当前使用：$current_usage GB%0A流量限制：$limit"
        
     # 调试：显示即将发送的消息内容
     echo "$(date '+%Y-%m-%d %H:%M:%S') : [调试] 发送到TG的消息内容:"| tee -a "$CRON_LOG"
@@ -291,7 +298,8 @@ get_current_traffic() {
         return 1
     fi
 }
-# 发送当前流量到TG
+
+# 实时查询并推送当前流量到TG
 send_current_traffic() {
     local current_usage=$(get_current_traffic)
     if [ $? -ne 0 ]; then
