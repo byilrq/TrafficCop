@@ -237,19 +237,24 @@ update_cron_time() {
 
 # 每日报告
 daily_report() {
-    # === 获取当前流量 ===
-    local current_usage
-    current_usage=$(get_current_traffic)
+    # === 获取当前流量信息 ===
+    local raw_output
+    raw_output=$(get_current_traffic)
 
-    if [ $? -ne 0 ] || [ -z "$current_usage" ]; then
-        current_usage="未知"
-    fi
+    # 提取关键字段
+    local datetime=$(echo "$raw_output" | grep -m1 "当前周期" | cut -d' ' -f1)
+    local period=$(echo "$raw_output" | grep "当前周期" | sed 's/.*当前周期: //')
+    local usage=$(echo "$raw_output" | grep "当前流量使用" | sed 's/.*当前流量使用: //;s/ GB//')
+
+    # 若解析失败，使用默认值
+    [ -z "$datetime" ] && datetime=$(date '+%Y-%m-%d %H:%M:%S')
+    [ -z "$period" ] && period="未知"
+    [ -z "$usage" ] && usage="未知"
 
     # === 获取限额信息 ===
     local TLIMIT TTOL limit
     eval "$(source "$WORK_DIR/trafficcop.sh" >/dev/null 2>&1; read_config >/dev/null 2>&1; \
         echo "TLIMIT=$TRAFFIC_LIMIT; TTOL=$TRAFFIC_TOLERANCE;")"
-
     if [[ -n "$TLIMIT" && -n "$TTOL" ]]; then
         limit=$(echo "$TLIMIT - $TTOL" | bc 2>/dev/null || echo "未知")
         limit="${limit} GB"
@@ -257,14 +262,15 @@ daily_report() {
         limit="未知"
     fi
 
-    # === 组装消息 ===
-    local message="📊 [${MACHINE_NAME}] 每日流量报告%0A%0A🖥️ 机器总流量：%0A当前使用：${current_usage} GB%0A流量限制：${limit}"
+    # === 构建精简消息 ===
+    local message="📊 [${MACHINE_NAME}] 每日流量报告%0A%0A🖥️ 机器总流量：%0A当前使用：${datetime}%0A当前周期: ${period}%0A当前流量使用: ${usage} GB%0A流量限制：${limit}"
 
-    # === 发送 Telegram 消息 ===
+    # === 推送 Telegram ===
     curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
         -d "chat_id=$CHAT_ID" \
         -d "text=$message" >/dev/null
 }
+
 
 
 # 获取当前总流量（完全复用 Traffic_all 的结构）
