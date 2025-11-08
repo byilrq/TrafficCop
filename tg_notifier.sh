@@ -305,71 +305,74 @@ daily_report() {
 
 
 # 获取当前总流量（返回纯数值，用于 daily_report）
-# 获取当前总流量（模仿 Traffic_all 逻辑，但在子 shell 中执行）
+# 获取当前总流量（Traffic_all安全版 + 确保输出）
 get_current_traffic() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') : 开始获取当前流量信息" >> "$CRON_LOG"
 
-    # 检查文件是否存在
     if [ ! -f "$WORK_DIR/trafficcop.sh" ]; then
         echo "$(date '+%Y-%m-%d %H:%M:%S') : trafficcop.sh 不存在" >> "$CRON_LOG"
         return 1
     fi
 
-    # 使用 mktemp 保存子进程输出
     local tmpfile
     tmpfile=$(mktemp /tmp/current_usage_XXXXXX)
 
-    # 在独立子 shell 中执行 Traffic_all 的逻辑
+    # 在独立子 shell 中执行，与 Traffic_all 同逻辑
     bash -c "
         set -e
         source '$WORK_DIR/trafficcop.sh' >/dev/null 2>&1
-
         if read_config; then
             current_usage=\$(get_traffic_usage)
             start_date=\$(get_period_start_date)
             end_date=\$(get_period_end_date)
-
             echo \"\$(date '+%Y-%m-%d %H:%M:%S') 当前周期: \$start_date 到 \$end_date\" >> '$CRON_LOG'
             echo \"\$(date '+%Y-%m-%d %H:%M:%S') 统计模式: \$TRAFFIC_MODE\" >> '$CRON_LOG'
             echo \"\$(date '+%Y-%m-%d %H:%M:%S') 当前流量使用: \$current_usage GB\" >> '$CRON_LOG'
             echo \"\$current_usage\" > '$tmpfile'
+            echo \"\$current_usage\"   # ✅ 直接输出给父进程
         else
-            echo \"\$(date '+%Y-%m-%d %H:%M:%S') 配置加载失败，无法读取流量\" >> '$CRON_LOG'
+            echo \"\$(date '+%Y-%m-%d %H:%M:%S') 配置加载失败\" >> '$CRON_LOG'
             exit 1
         fi
     " &
-
     local pid=$!
+
+    # 等待子进程最多 6 秒
     local timeout=6
     local waited=0
-
-    # 6秒超时保护
     while kill -0 "$pid" 2>/dev/null; do
         sleep 1
         waited=$((waited + 1))
         if [ $waited -ge $timeout ]; then
-            echo "$(date '+%Y-%m-%d %H:%M:%S') : 超时 ${timeout}s，强制终止子进程 PID=$pid" >> "$CRON_LOG"
+            echo "$(date '+%Y-%m-%d %H:%M:%S') : 超时 ${timeout}s，强制终止 PID=$pid" >> "$CRON_LOG"
             kill -9 "$pid" 2>/dev/null
             rm -f "$tmpfile"
             return 1
         fi
     done
 
-    # 检查输出
+    # 等 0.2 秒，确保 tmpfile 写完
+    sleep 0.2
+
+    # 获取结果（优先 tmpfile，fallback stdout）
+    local usage=""
     if [ -s "$tmpfile" ]; then
-        local usage
         usage=$(tr -d '\r\n ' < "$tmpfile")
         rm -f "$tmpfile"
+    else
+        # 若 tmpfile 为空，检查子进程的最后一行输出（备用）
+        usage=$(tail -n 1 "$CRON_LOG" | grep -oE '[0-9]+\.[0-9]+' | tail -n 1)
+    fi
+
+    if [ -n "$usage" ]; then
         echo "$(date '+%Y-%m-%d %H:%M:%S') : 成功读取流量 $usage GB" >> "$CRON_LOG"
         echo "$usage"
         return 0
     else
-        rm -f "$tmpfile"
         echo "$(date '+%Y-%m-%d %H:%M:%S') : 未获取到流量数据" >> "$CRON_LOG"
         return 1
     fi
 }
-
 
 
 
