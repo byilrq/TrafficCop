@@ -276,29 +276,44 @@ daily_report() {
     fi
 }
 
-# 获取当前流量信息
+# 获取当前流量信息（仅返回数值）
 get_current_traffic() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') : 开始获取当前流量信息" >> "$CRON_LOG"
-    if [ -f "$WORK_DIR/trafficcop.sh" ]; then
-        source "$WORK_DIR/trafficcop.sh" >/dev/null 2>&1
+    {
+        echo "$(date '+%Y-%m-%d %H:%M:%S') : 开始获取当前流量信息"
+        if [ -f "$WORK_DIR/trafficcop.sh" ]; then
+            source "$WORK_DIR/trafficcop.sh" >/dev/null 2>&1
+        else
+            echo "$(date '+%Y-%m-%d %H:%M:%S') : 流量监控脚本 (trafficcop.sh) 不存在，无法获取流量信息"
+            return 1
+        fi
+
+        if read_config; then
+            local current_usage=$(get_traffic_usage)
+            local start_date=$(get_period_start_date)
+            local end_date=$(get_period_end_date)
+            local traffic_mode=$TRAFFIC_MODE
+            echo "$(date '+%Y-%m-%d %H:%M:%S') 当前周期: $start_date 到 $end_date"
+            echo "$(date '+%Y-%m-%d %H:%M:%S') 统计模式: $traffic_mode"
+            echo "$(date '+%Y-%m-%d %H:%M:%S') 当前流量使用: $current_usage GB"
+            # 输出日志到文件，但真正返回值单独 echo
+            echo "$current_usage" > "$WORK_DIR/.current_usage.tmp"
+        else
+            echo "$(date '+%Y-%m-%d %H:%M:%S') 配置加载失败，无法读取流量"
+            return 1
+        fi
+    } >> "$CRON_LOG" 2>&1
+
+    # 从临时文件中读取干净的返回值
+    if [ -f "$WORK_DIR/.current_usage.tmp" ]; then
+        local usage=$(cat "$WORK_DIR/.current_usage.tmp")
+        rm -f "$WORK_DIR/.current_usage.tmp"
+        echo "$usage"
+        return 0
     else
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : 流量监控脚本 (trafficcop.sh) 不存在，无法获取流量信息" >> "$CRON_LOG"
-        return 1
-    fi
-    if read_config; then
-        local current_usage=$(get_traffic_usage)
-        local start_date=$(get_period_start_date)
-        local end_date=$(get_period_end_date)
-        local traffic_mode=$TRAFFIC_MODE
-        echo "$(date '+%Y-%m-%d %H:%M:%S') 当前周期: $start_date 到 $end_date" >> "$CRON_LOG"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') 统计模式: $traffic_mode" >> "$CRON_LOG"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') 当前流量使用: $current_usage GB" >> "$CRON_LOG"
-        echo "$current_usage"
-    else
-        echo "$(date '+%Y-%m-%d %H:%M:%S') 配置加载失败，无法读取流量" >> "$CRON_LOG"
         return 1
     fi
 }
+
 
 # 实时查询并推送当前流量到TG
 send_current_traffic() {
