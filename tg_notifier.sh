@@ -302,7 +302,7 @@ get_current_traffic() {
                 } >> "$CRON_LOG"
 
                 # 只输出当前使用值（供调用方使用）
-                echo "$current_usage"
+                echo "$(date '+%Y-%m-%d %H:%M:%S') 当前流量使用: $current_usage GB"
             else
                 echo "$(date '+%Y-%m-%d %H:%M:%S') 配置加载失败，无法读取流量" >> "$CRON_LOG"
                 exit 1
