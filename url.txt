@@ -11,7 +11,7 @@ sudo tc qdisc del dev $(ip route | grep default | cut -d ' ' -f 5) root
 ## 一键安装脚本
 ### 一键安装交互式脚本
 ```
-wget -N --no-check-certificate https://raw.githubusercontent.com/byilrq/TrafficCop/main/trafficcop-manager.sh && bash trafficcop-manager.sh
+wget -N --no-check-certificate https://raw.githubusercontent.com/byilrq/TrafficCop/main/t.sh && bash t.sh
 ```
 ## 实用命令
 ### 查看日志：
@@ -26,3 +26,4 @@ sudo cat /root/TrafficCop/traffic_monitor_config.txt
 ```
 sudo pkill -f traffic_monitor.sh
 ```
+
