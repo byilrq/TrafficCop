@@ -391,29 +391,32 @@ daily_report() {
         limit="未知"
     fi
 
-    # === 计算到期剩余天数 ===
-    local today=$(date '+%Y-%m-%d')
-    local expire_formatted=$(echo "$EXPIRE_DATE" | tr '.' '-')
-    local expire_ts=$(date -d "$expire_formatted" +%s 2>/dev/null)
-    local today_ts=$(date -d "$today" +%s)
-    local diff_days=$(( (expire_ts - today_ts) / 86400 ))
+# === 计算到期剩余天数 ===
+local today=$(date '+%Y-%m-%d')
+local expire_formatted=$(echo "$EXPIRE_DATE" | tr '.' '-')
+local expire_ts=$(date -d "$expire_formatted" +%s 2>/dev/null)
+local today_ts=$(date -d "$today" +%s)
+local diff_days=$(( (expire_ts - today_ts) / 86400 ))
 
-    if (( diff_days < 0 )); then
-        diff_days="已过期"
-        diff_emoji="🔴"
-    else
-        diff_emoji="🟢"
-        diff_days="${diff_days}天"
-    fi
+if (( diff_days < 0 )); then
+    diff_days="已过期"
+    diff_emoji="🔴"
+elif (( diff_days <= 30 )); then
+    diff_emoji="🟡"
+    diff_days="${diff_days}天 (即将到期)"
+else
+    diff_emoji="🟢"
+    diff_days="${diff_days}天"
+fi
 
     # === 构建美化消息 ===
     local message="🌐 [${MACHINE_NAME}] 每日流量报告%0A%0A"
-    message+="🖥️ 机器总流量：%0A"
+    message+="🖥️ VPS流量信息：%0A"
     message+="🕒推送日期：$(date '+%Y-%m-%d')%0A"
     message+="${diff_emoji}剩余天数：${diff_days}%0A"
     message+="📅当前周期: ${period}%0A"
-    message+="⌛当前流量使用: ${usage} GB%0A"
-    message+="📦流量限制：${limit}"
+    message+="⌛已用流量: ${usage} GB%0A"
+    message+="📦流量套餐：${limit}"
 
     # === 推送 Telegram ===
     curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
