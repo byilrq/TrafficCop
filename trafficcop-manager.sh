@@ -18,7 +18,7 @@ NC='\033[0m' # No Color
 
 # 基础目录
 WORK_DIR="/root/TrafficCop"
-REPO_URL="https://raw.githubusercontent.com/ypq123456789/TrafficCop/main"
+REPO_URL="https://raw.githubusercontent.com/byilrq/TrafficCop/main"
 
 # 检查root权限
 check_root() {
@@ -114,76 +114,6 @@ install_serverchan_notifier() {
     read -p "按回车键继续..."
 }
 
-# 安装端口流量限制
-install_port_traffic_limit() {
-    echo -e "${CYAN}正在安装端口流量限制功能...${NC}"
-    
-    # 安装主配置脚本
-    install_script "port_traffic_limit.sh"
-    
-    # 安装端口流量查看脚本
-    echo -e "${YELLOW}正在下载端口流量查看脚本...${NC}"
-    install_script "view_port_traffic.sh"
-    
-    # 安装辅助函数库
-    echo -e "${YELLOW}正在下载辅助函数库...${NC}"
-    install_script "port_traffic_helper.sh"
-    
-    # 运行配置向导
-    run_script "$WORK_DIR/port_traffic_limit.sh"
-    
-    echo -e "${GREEN}端口流量限制功能安装完成！${NC}"
-    echo -e "${CYAN}提示：使用选项5可管理端口配置，支持序号快速选择${NC}"
-    read -p "按回车键继续..."
-}
-
-# 管理端口配置
-manage_port_config() {
-    echo -e "${CYAN}端口配置管理${NC}"
-    
-    if [ ! -f "$WORK_DIR/port_traffic_limit.sh" ]; then
-        echo -e "${RED}端口流量限制脚本不存在，请先安装${NC}"
-        read -p "按回车键继续..."
-        return
-    fi
-    
-    run_script "$WORK_DIR/port_traffic_limit.sh"
-}
-
-# 查看端口流量状态
-view_port_traffic() {
-    echo -e "${CYAN}正在查看端口流量状态...${NC}"
-    
-    # 确保脚本存在
-    if [ ! -f "$WORK_DIR/view_port_traffic.sh" ]; then
-        echo -e "${YELLOW}端口流量查看脚本不存在，正在下载...${NC}"
-        install_script "view_port_traffic.sh"
-    fi
-    
-    if [ -f "$WORK_DIR/view_port_traffic.sh" ]; then
-        # 运行脚本并等待用户输入
-        bash "$WORK_DIR/view_port_traffic.sh"
-        echo ""
-        echo -e "${CYAN}端口流量状态查看完成${NC}"
-        read -p "按回车键返回主菜单..."
-    else
-        echo -e "${RED}无法下载端口流量查看脚本${NC}"
-        read -p "按回车键继续..."
-    fi
-}
-
-# 解除端口流量限制
-remove_port_traffic_limit() {
-    echo -e "${CYAN}正在解除端口流量限制...${NC}"
-    if [ -f "$WORK_DIR/port_traffic_limit.sh" ]; then
-        bash "$WORK_DIR/port_traffic_limit.sh" --remove
-        echo -e "${GREEN}端口流量限制已解除！${NC}"
-        echo -e "${YELLOW}注意：配置文件和查看脚本仍保留，可继续使用选项12/13管理${NC}"
-    else
-        echo -e "${RED}端口流量限制脚本不存在${NC}"
-    fi
-    read -p "按回车键继续..."
-}
 
 # 查看日志
 view_logs() {
@@ -192,7 +122,6 @@ view_logs() {
     echo "2) Telegram通知日志"
     echo "3) PushPlus通知日志"
     echo "4) Server酱通知日志"
-    echo "5) 端口流量监控日志"
     echo "0) 返回主菜单"
     
     read -p "请选择要查看的日志 [0-5]: " log_choice
@@ -224,13 +153,6 @@ view_logs() {
                 tail -20 "$WORK_DIR/serverchan_notifier.log"
             else
                 echo -e "${RED}Server酱通知日志不存在${NC}"
-            fi
-            ;;
-        5)
-            if [ -f "$WORK_DIR/port_traffic_monitor.log" ]; then
-                tail -20 "$WORK_DIR/port_traffic_monitor.log"
-            else
-                echo -e "${RED}端口流量监控日志不存在${NC}"
             fi
             ;;
         0)
@@ -295,66 +217,6 @@ view_config() {
     read -p "按回车键继续..."
 }
 
-# 使用预设配置
-use_preset_config() {
-    echo -e "${CYAN}使用预设配置${NC}"
-    echo ""
-    echo "可用的预设配置:"
-    echo "1) ali-20g  - 阿里云轻量 20G配置"
-    echo "2) ali-200g - 阿里云轻量 200G配置"
-    echo "3) ali-1T   - 阿里云轻量 1T配置"
-    echo "4) asia-300g - 亚洲地区 300G配置"
-    echo "5) az-15g   - Azure 15G配置"
-    echo "6) az-115g  - Azure 115G配置"
-    echo "7) gcp-200g - Google Cloud 200G配置"
-    echo "8) gcp-625g - Google Cloud 625G配置"
-    echo "9) alice-1500g - Alice 1500G配置"
-    echo "0) 返回主菜单"
-    echo ""
-    
-    read -p "请选择预设配置 [0-9]: " preset_choice
-    
-    local config_file=""
-    case $preset_choice in
-        1) config_file="ali-20g" ;;
-        2) config_file="ali-200g" ;;
-        3) config_file="ali-1T" ;;
-        4) config_file="asia-300g" ;;
-        5) config_file="az-15g" ;;
-        6) config_file="az-115g" ;;
-        7) config_file="gcp-200g" ;;
-        8) config_file="gcp-625g" ;;
-        9) config_file="alice-1500g" ;;
-        0) return ;;
-        *) 
-            echo -e "${RED}无效的选择${NC}"
-            read -p "按回车键继续..."
-            return
-            ;;
-    esac
-    
-    echo -e "${YELLOW}正在下载并应用预设配置 $config_file...${NC}"
-    
-    # 下载预设配置文件
-    if curl -fsSL "$REPO_URL/$config_file" -o "$WORK_DIR/traffic_monitor_config.txt"; then
-        echo -e "${GREEN}预设配置已应用！${NC}"
-        echo -e "${CYAN}配置内容：${NC}"
-        cat "$WORK_DIR/traffic_monitor_config.txt"
-        
-        # 提示用户是否立即启动监控
-        echo ""
-        read -p "是否立即启动流量监控？[y/N]: " start_monitor
-        if [[ $start_monitor =~ ^[Yy]$ ]]; then
-            install_script "trafficcop.sh"
-            run_script "$WORK_DIR/trafficcop.sh"
-        fi
-    else
-        echo -e "${RED}下载预设配置失败${NC}"
-    fi
-    
-    read -p "按回车键继续..."
-}
-
 # 停止所有服务
 stop_all_services() {
     echo -e "${CYAN}正在停止所有TrafficCop服务...${NC}"
@@ -405,22 +267,6 @@ update_all_scripts() {
     read -p "按回车键继续..."
 }
 
-# 机器限速管理
-manage_machine_limit() {
-    echo -e "${CYAN}正在启动机器限速管理器...${NC}"
-    
-    # 下载并运行机器限速管理器
-    echo -e "${YELLOW}正在下载机器限速管理器...${NC}"
-    install_script "machine_limit_manager.sh"
-    
-    if [ -f "$WORK_DIR/machine_limit_manager.sh" ]; then
-        run_script "$WORK_DIR/machine_limit_manager.sh"
-    else
-        echo -e "${RED}无法下载机器限速管理器${NC}"
-        echo -e "${YELLOW}尝试使用旧方式解除限速...${NC}"
-        remove_traffic_limit
-    fi
-}
 
 # 显示主菜单
 show_main_menu() {
@@ -435,14 +281,11 @@ show_main_menu() {
     echo -e "${YELLOW}2) 安装/管理Telegram通知${NC}"
     echo -e "${YELLOW}3) 安装/管理PushPlus通知${NC}"
     echo -e "${YELLOW}4) 安装/管理Server酱通知${NC}"
-    echo -e "${YELLOW}5) 安装/管理端口流量限制${NC}"
-    echo -e "${CYAN}6) 查看端口流量状态${NC}"
-    echo -e "${GREEN}7) 机器限速管理 (启用/禁用)${NC}"
-    echo -e "${YELLOW}8) 查看日志${NC}"
-    echo -e "${YELLOW}9) 查看当前配置${NC}"
-    echo -e "${YELLOW}10) 使用预设配置${NC}"
-    echo -e "${YELLOW}11) 停止所有服务${NC}"
-    echo -e "${GREEN}12) 更新所有脚本到最新版本${NC}"
+    echo -e "${YELLOW}5) 查看日志${NC}"
+    echo -e "${YELLOW}6) 查看当前配置${NC}"
+    echo -e "${YELLOW}7) 使用预设配置${NC}"
+    echo -e "${YELLOW}8) 停止所有服务${NC}"
+    echo -e "${GREEN}9) 更新所有脚本到最新版本${NC}"
     echo -e "${YELLOW}0) 退出${NC}"
     echo -e "${PURPLE}====================================${NC}"
     echo ""
@@ -471,27 +314,18 @@ main() {
                 install_serverchan_notifier
                 ;;
             5)
-                manage_port_config
-                ;;
-            6)
-                view_port_traffic
-                ;;
-            7)
-                manage_machine_limit
-                ;;
-            8)
                 view_logs
                 ;;
-            9)
+            5)
                 view_config
                 ;;
-            10)
+            7)
                 use_preset_config
                 ;;
-            11)
+            8)
                 stop_all_services
                 ;;
-            12)
+            9)
                 update_all_scripts
                 ;;
             0)
