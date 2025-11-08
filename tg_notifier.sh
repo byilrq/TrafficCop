@@ -400,18 +400,27 @@ daily_report() {
 
     if (( diff_days < 0 )); then
         diff_days="已过期"
+        diff_emoji="🔴"
     else
+        diff_emoji="🟢"
         diff_days="${diff_days}天"
     fi
 
-    # === 构建消息 ===
-    local message="📊 [${MACHINE_NAME}] 每日流量报告%0A%0A🖥️ 机器总流量：%0A推送日期：$(date '+%Y-%m-%d')%0A剩余天数：${diff_days}%0A当前周期: ${period}%0A当前流量使用: ${usage} GB%0A流量限制：${limit}"
+    # === 构建美化消息 ===
+    local message="🌐 [${MACHINE_NAME}] 每日流量报告%0A%0A"
+    message+="🖥️ 机器总流量：%0A"
+    message+="🕒推送日期：$(date '+%Y-%m-%d')%0A"
+    message+="${diff_emoji}剩余天数：${diff_days}%0A"
+    message+="📅当前周期: ${period}%0A"
+    message+="⌛当前流量使用: ${usage} GB%0A"
+    message+="📦流量限制：${limit}"
 
     # === 推送 Telegram ===
     curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
         -d "chat_id=$CHAT_ID" \
         -d "text=$message" >/dev/null
 }
+
 
 
 
