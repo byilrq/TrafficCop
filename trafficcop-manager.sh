@@ -309,7 +309,7 @@ show_main_menu() {
     echo -e "${YELLOW}7) 使用预设配置${NC}"
     echo -e "${YELLOW}8) 停止所有服务${NC}"
     echo -e "${GREEN}9) 更新所有脚本到最新版本${NC}"
-    echo -e "${GREEN}10) 读取当前使用流量${NC}"   
+    echo -e "${YELLOW}10) 读取当前使用流量${NC}"   
     echo -e "${YELLOW}0) 退出${NC}"
     echo -e "${PURPLE}====================================${NC}"
     echo ""
