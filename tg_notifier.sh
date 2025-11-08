@@ -305,52 +305,57 @@ daily_report() {
 
 
 # 获取当前总流量（返回纯数值，用于 daily_report）
-# 获取当前总流量（6秒超时保护）
+# 获取当前总流量（模仿 Traffic_all 逻辑，但在子 shell 中执行）
 get_current_traffic() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') : 开始获取当前流量信息" >> "$CRON_LOG"
 
+    # 检查文件是否存在
     if [ ! -f "$WORK_DIR/trafficcop.sh" ]; then
         echo "$(date '+%Y-%m-%d %H:%M:%S') : trafficcop.sh 不存在" >> "$CRON_LOG"
         return 1
     fi
 
+    # 使用 mktemp 保存子进程输出
     local tmpfile
     tmpfile=$(mktemp /tmp/current_usage_XXXXXX)
 
-    # ✅ 启动子 bash（后台运行），强制无缓存执行
+    # 在独立子 shell 中执行 Traffic_all 的逻辑
     bash -c "
         set -e
-        unset TRAFFIC_MODE TRAFFIC_LIMIT TRAFFIC_TOLERANCE MAIN_INTERFACE
         source '$WORK_DIR/trafficcop.sh' >/dev/null 2>&1
 
-        # 强制刷新 vnstat 数据库（防止读取旧值）
-        vnstat --update -i \"\$MAIN_INTERFACE\" >/dev/null 2>&1
-
-        # 再读取配置和流量
         if read_config; then
-            usage=\$(get_traffic_usage 2>/dev/null)
-            if [ -n \"\$usage\" ]; then
-                echo \"\$usage\" > '$tmpfile'
-            fi
+            current_usage=\$(get_traffic_usage)
+            start_date=\$(get_period_start_date)
+            end_date=\$(get_period_end_date)
+
+            echo \"\$(date '+%Y-%m-%d %H:%M:%S') 当前周期: \$start_date 到 \$end_date\" >> '$CRON_LOG'
+            echo \"\$(date '+%Y-%m-%d %H:%M:%S') 统计模式: \$TRAFFIC_MODE\" >> '$CRON_LOG'
+            echo \"\$(date '+%Y-%m-%d %H:%M:%S') 当前流量使用: \$current_usage GB\" >> '$CRON_LOG'
+            echo \"\$current_usage\" > '$tmpfile'
+        else
+            echo \"\$(date '+%Y-%m-%d %H:%M:%S') 配置加载失败，无法读取流量\" >> '$CRON_LOG'
+            exit 1
         fi
     " &
-    local child_pid=$!
 
-    # ✅ 超时保护（6 秒内必须退出）
+    local pid=$!
     local timeout=6
     local waited=0
-    while kill -0 "$child_pid" 2>/dev/null; do
+
+    # 6秒超时保护
+    while kill -0 "$pid" 2>/dev/null; do
         sleep 1
         waited=$((waited + 1))
         if [ $waited -ge $timeout ]; then
-            echo "$(date '+%Y-%m-%d %H:%M:%S') : 超时 ${timeout}s，强制终止 PID=$child_pid" >> "$CRON_LOG"
-            kill -9 "$child_pid" 2>/dev/null
+            echo "$(date '+%Y-%m-%d %H:%M:%S') : 超时 ${timeout}s，强制终止子进程 PID=$pid" >> "$CRON_LOG"
+            kill -9 "$pid" 2>/dev/null
             rm -f "$tmpfile"
             return 1
         fi
     done
 
-    # ✅ 检查结果
+    # 检查输出
     if [ -s "$tmpfile" ]; then
         local usage
         usage=$(tr -d '\r\n ' < "$tmpfile")
@@ -359,12 +364,11 @@ get_current_traffic() {
         echo "$usage"
         return 0
     else
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : 未获取到流量数据或 trafficcop 返回空" >> "$CRON_LOG"
         rm -f "$tmpfile"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') : 未获取到流量数据" >> "$CRON_LOG"
         return 1
     fi
 }
-
 
 
 
