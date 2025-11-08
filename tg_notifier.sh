@@ -357,6 +357,8 @@ if [[ "$*" == *"-cron"* ]]; then
         fi
        
         setup_cron
+
+        
 # "修正当前流量"
 correct_traffic() {
     local db_path="/var/lib/vnstat/vnstat.db"
