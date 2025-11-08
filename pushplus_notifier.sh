@@ -152,10 +152,10 @@ if [[ -z "$expire_ts" || -z "$today_ts" ]]; then
     diff_emoji="⚫"
 else
     local diff_days=$(( (expire_ts - today_ts) / 86400 ))
-    if (( diff_days < 0 )); then
+    if (( diff_days < 30 )); then
         diff_days="已过期"
         diff_emoji="🔴"
-    elif (( diff_days <= 30 )); then
+    elif (( diff_days <= 60 )); then
         diff_emoji="🟡"
         diff_days="${diff_days}天 (即将到期)"
     else
@@ -166,13 +166,12 @@ fi
 
 
     # === 拼接消息 ===
-    local title="🌐 [${MACHINE_NAME}] 每日流量报告"
-    local content="🖥️ VPS流量信息：<br>"
-    content+="🕒推送日期：$(date '+%Y-%m-%d')<br>"
-    content+="${diff_emoji}剩余天数：${diff_days}<br>"
-    content+="📅当前周期: ${period}<br>"
-    content+="⌛已用流量: ${usage} GB<br>"
-    content+="📦流量套餐：${limit}"
+    local title="🖥️ [${MACHINE_NAME}] 每日报告"
+    content+="🕒日期：$(date '+%Y-%m-%d')<br>"
+    content+="${diff_emoji}剩余：${diff_days}<br>"
+    content+="📅周期: ${period}<br>"
+    content+="⌛已用: ${usage} GB<br>"
+    content+="🌐套餐：${limit}"
 
     pushplus_send "$title" "$content"
 }
@@ -195,6 +194,33 @@ get_current_traffic() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') 当前周期: $start_date 到 $end_date"
     echo "$(date '+%Y-%m-%d %H:%M:%S') 统计模式: $mode"
     echo "$(date '+%Y-%m-%d %H:%M:%S') 当前流量使用: $current_usage GB"
+}
+
+pushplus_stop() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') : 开始停止 PushPlus 推送功能。" | tee -a "$CRON_LOG"
+    
+    # 移除 Crontab 定时任务
+    if crontab -l | grep -q "$SCRIPT_PATH"; then
+        crontab -l | grep -v "$SCRIPT_PATH" | crontab -
+        echo "$(date '+%Y-%m-%d %H:%M:%S') : ✅ Crontab 定时任务已移除。" | tee -a "$CRON_LOG"
+    else
+        echo "$(date '+%Y-%m-%d %H:%M:%S') : ℹ️ 无需移除 Crontab 任务（未找到相关条目）。" | tee -a "$CRON_LOG"
+    fi
+    
+    # 可选：删除配置文件以防止进一步运行（如果需要完全禁用）
+    # if [ -f "$CONFIG_FILE" ]; then
+    #     rm -f "$CONFIG_FILE"
+    #     echo "$(date '+%Y-%m-%d %H:%M:%S') : ✅ 配置文件已删除。" | tee -a "$CRON_LOG"
+    # fi
+    
+    # 可选：删除日志文件（如果需要清理）
+    # if [ -f "$CRON_LOG" ]; then
+    #     rm -f "$CRON_LOG"
+    #     echo "$(date '+%Y-%m-%d %H:%M:%S') : ✅ 日志文件已删除。" | tee -a "$CRON_LOG"
+    # fi
+    
+    echo "$(date '+%Y-%m-%d %H:%M:%S') : ✅ PushPlus 推送功能已停止。" | tee -a "$CRON_LOG"
+    exit 0
 }
 
 # ============================================
@@ -229,6 +255,7 @@ main() {
             echo "2. 发送测试消息"
             echo "3. 实时流量"
             echo "4. 修改配置"
+            echo "5. 停止运行"
             echo "0. 退出"
             read -p "请选择: " choice
             case $choice in
@@ -236,6 +263,7 @@ main() {
                 2) test_pushplus_notification ;;
                 3) get_current_traffic ;;
                 4) initial_config ;;
+                5) pushplus_stop ;;
                 0) exit 0 ;;
             esac
             read -p "按 Enter 返回菜单..."
