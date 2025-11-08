@@ -277,53 +277,55 @@ daily_report() {
 }
 
 # 获取当前总流量（返回纯数值，用于 daily_report）
-# 获取当前总流量（返回纯数值，用于 daily_report）
+# 获取当前总流量（6秒超时保护）
 get_current_traffic() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') : 开始获取当前流量信息" >> "$CRON_LOG"
 
-    local tmpfile="$WORK_DIR/.current_usage.tmp"
-    rm -f "$tmpfile" 2>/dev/null
-
-    # 确认脚本存在
     if [ ! -f "$WORK_DIR/trafficcop.sh" ]; then
         echo "$(date '+%Y-%m-%d %H:%M:%S') : trafficcop.sh 不存在" >> "$CRON_LOG"
         return 1
     fi
 
-    # 在子 Shell 执行以防环境污染
-    (
-        source "$WORK_DIR/trafficcop.sh" >/dev/null 2>&1
+    # 使用 mktemp 创建唯一临时文件
+    local tmpfile
+    tmpfile=$(mktemp /tmp/current_usage_XXXXXX)
 
+    # ✅ 启动子 bash 进程（后台运行）
+    bash -c "
+        source '$WORK_DIR/trafficcop.sh' >/dev/null 2>&1
         if read_config; then
-            local current_usage
-            current_usage=$(get_traffic_usage)
-            local start_date=$(get_period_start_date)
-            local end_date=$(get_period_end_date)
-            local traffic_mode=$TRAFFIC_MODE
+            vnstat --update -i \"\$MAIN_INTERFACE\" >/dev/null 2>&1
+            usage=\$(get_traffic_usage)
+            echo \"\$usage\" > '$tmpfile'
+        fi
+    " &
+    local child_pid=$!
 
-            {
-                echo "$(date '+%Y-%m-%d %H:%M:%S') 当前周期: $start_date 到 $end_date"
-                echo "$(date '+%Y-%m-%d %H:%M:%S') 统计模式: $traffic_mode"
-                echo "$(date '+%Y-%m-%d %H:%M:%S') 当前流量使用: $current_usage GB"
-            } >> "$CRON_LOG"
-
-            echo "$current_usage" > "$tmpfile"
-        else
-            echo "$(date '+%Y-%m-%d %H:%M:%S') 配置加载失败" >> "$CRON_LOG"
-            # ⚠️ 使用 return 而不是 exit，防止阻塞外层 shell
+    # ✅ 等待子进程，最多 6 秒
+    local timeout=6
+    local waited=0
+    while kill -0 "$child_pid" 2>/dev/null; do
+        sleep 1
+        waited=$((waited + 1))
+        if [ $waited -ge $timeout ]; then
+            echo "$(date '+%Y-%m-%d %H:%M:%S') : 超时 ${timeout}s，强制终止子进程 PID=$child_pid" >> "$CRON_LOG"
+            kill -9 "$child_pid" 2>/dev/null
+            rm -f "$tmpfile"
             return 1
         fi
-    )
+    done
 
-    # 子 Shell 执行结束后，外层继续执行
+    # ✅ 子进程退出后，检查结果
     if [ -s "$tmpfile" ]; then
         local usage
-        usage=$(cat "$tmpfile" | tr -d '\r\n ')
+        usage=$(tr -d '\r\n ' < "$tmpfile")
         rm -f "$tmpfile"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') : 成功读取流量 $usage GB" >> "$CRON_LOG"
         echo "$usage"
         return 0
     else
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : 未获取到流量数据" >> "$CRON_LOG"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') : 获取流量失败或输出为空" >> "$CRON_LOG"
+        rm -f "$tmpfile"
         return 1
     fi
 }
