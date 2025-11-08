@@ -234,6 +234,7 @@ update_cron_time() {
    
     echo "cron任务时间已更新"
 }
+
 # 每日报告
 # 每日报告
 daily_report() {
@@ -258,7 +259,7 @@ daily_report() {
     fi
     # 构建基础消息
     local message="📊 [${MACHINE_NAME}]每日流量报告%0A%0A🖥️ 机器总流量：%0A当前使用：$current_usage GB%0A流量限制：$limit"
-       
+      
     # 调试：显示即将发送的消息内容
     echo "$(date '+%Y-%m-%d %H:%M:%S') : [调试] 发送到TG的消息内容:"| tee -a "$CRON_LOG"
     echo "$(date '+%Y-%m-%d %H:%M:%S') : [调试] $message"| tee -a "$CRON_LOG"
@@ -274,6 +275,7 @@ daily_report() {
         return 1
     fi
 }
+
 # 获取当前流量信息
 get_current_traffic() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') : 开始获取当前流量信息" | tee -a "$CRON_LOG"
