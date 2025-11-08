@@ -357,69 +357,6 @@ if [[ "$*" == *"-cron"* ]]; then
         fi
        
         setup_cron
-
-        
-# "修正当前流量"
-correct_traffic() {
-    # === 自动加载配置，确定接口 ===
-    source "$WORK_DIR/trafficcop.sh" >/dev/null 2>&1 || {
-        echo "❌ 未找到 trafficcop.sh"
-        return 1
-    }
-    if ! read_config >/dev/null 2>&1; then
-        echo "❌ 无法读取配置，请先配置 trafficcop.sh"
-        return 1
-    fi
-
-    local iface="$MAIN_INTERFACE"
-    local db_path="/var/lib/vnstat/vnstat.db"
-
-    if [ -z "$iface" ]; then
-        echo "❌ 未检测到 MAIN_INTERFACE，请检查 trafficcop.sh 配置"
-        return 1
-    fi
-
-    if [ ! -f "$db_path" ]; then
-        echo "❌ 数据库不存在: $db_path"
-        return 1
-    fi
-
-    if ! command -v sqlite3 >/dev/null 2>&1; then
-        echo "❌ 未安装 sqlite3，请执行: apt install sqlite3"
-        return 1
-    fi
-
-    echo "当前接口: $iface"
-
-    # === 显示当前统计值 ===
-    sqlite3 "$db_path" "SELECT totalrx, totaltx FROM interface WHERE name='$iface';"
-
-    # === 输入新值 ===
-    read -p "请输入新的接收流量 (GiB): " new_rx
-    read -p "请输入新的发送流量 (GiB，可选，默认0): " new_tx
-    [ -z "$new_tx" ] && new_tx=0
-
-    if [[ -z "$new_rx" ]]; then
-        echo "未输入新值，已取消。"
-        return 1
-    fi
-
-    # === 转换为 MB 并更新数据库 ===
-    local rx_mb tx_mb
-    rx_mb=$(awk "BEGIN{print $new_rx*1024}")
-    tx_mb=$(awk "BEGIN{print $new_tx*1024}")
-
-    sqlite3 "$db_path" "UPDATE interface SET totalrx=$rx_mb, totaltx=$tx_mb WHERE name='$iface';"
-
-    echo "✅ 已修正 $iface 流量: RX=${new_rx} GiB, TX=${new_tx} GiB"
-    echo "正在刷新 vnStat 缓存..."
-    systemctl restart vnstat >/dev/null 2>&1
-    vnstat --update -i "$iface" >/dev/null 2>&1
-
-    echo "✅ 当前统计："
-    vnstat -i "$iface"
-}
-
  
 
 # 显示菜单
@@ -441,7 +378,6 @@ correct_traffic() {
             echo "5. 修改每日报告时间"
             echo "6. 实时查询并推送当前流量"
             echo "7. 实时查询当前流量"
-            echo "8. 修正当前使用流量"
             echo "0. 退出"
             echo "======================================"
             echo -n "请选择操作 [0-6]: "
@@ -498,11 +434,6 @@ correct_traffic() {
                     echo "正在实时查询并推送当前流量..."
                     get_current_traffic
                     ;;
-                8)
-                    echo "修正当前流量"
-                    correct_traffic
-                    ;;                    
-            
                 *)
                     echo "无效的选择，请输入 0-6"
                     ;;
