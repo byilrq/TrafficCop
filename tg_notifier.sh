@@ -237,74 +237,36 @@ update_cron_time() {
 
 # 每日报告
 daily_report() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') : 开始生成每日报告" | tee -a "$CRON_LOG"
-    echo "$(date '+%Y-%m-%d %H:%M:%S') : DAILY_REPORT_TIME=$DAILY_REPORT_TIME" | tee -a "$CRON_LOG"
-    echo "$(date '+%Y-%m-%d %H:%M:%S') : BOT_TOKEN=${BOT_TOKEN:0:5}... CHAT_ID=$CHAT_ID" | tee -a "$CRON_LOG"
-    echo "$(date '+%Y-%m-%d %H:%M:%S') : 日志文件路径: $LOG_FILE" | tee -a "$CRON_LOG"
-
-    # ========= 直接调用 get_current_traffic =========
+    # === 获取当前流量 ===
     local current_usage
     current_usage=$(get_current_traffic)
 
-    # 检查执行结果
     if [ $? -ne 0 ] || [ -z "$current_usage" ]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : 获取最新流量失败或为空，设置为 未知" | tee -a "$CRON_LOG"
         current_usage="未知"
-    else
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : 当前流量使用: ${current_usage} GB" | tee -a "$CRON_LOG"
     fi
 
-    # ========= 获取限额信息 =========
-    local tmp_limit_file
-    tmp_limit_file=$(mktemp /tmp/tlimits_XXXXXX)
+    # === 获取限额信息 ===
+    local TLIMIT TTOL limit
+    eval "$(source "$WORK_DIR/trafficcop.sh" >/dev/null 2>&1; read_config >/dev/null 2>&1; \
+        echo "TLIMIT=$TRAFFIC_LIMIT; TTOL=$TRAFFIC_TOLERANCE;")"
 
-    bash -c "
-        source '$WORK_DIR/trafficcop.sh' >/dev/null 2>&1 || exit 1
-        if read_config >/dev/null 2>&1; then
-            echo \"\$TRAFFIC_LIMIT|\$TRAFFIC_TOLERANCE|\$TRAFFIC_MODE|\$MAIN_INTERFACE\"
-        fi
-    " > "$tmp_limit_file" 2>/dev/null
-
-    local limit="未知" limit_threshold="未知" TLIMIT="" TTOL=""
-    if [ -s "$tmp_limit_file" ]; then
-        IFS='|' read -r TLIMIT TTOL MODE IFACE < "$tmp_limit_file"
-        rm -f "$tmp_limit_file"
-        if [[ -n "$TLIMIT" && -n "$TTOL" ]]; then
-            limit_threshold=$(echo "$TLIMIT - $TTOL" | bc 2>/dev/null || echo "0")
-            limit="${limit_threshold} GB"
-            echo "$(date '+%Y-%m-%d %H:%M:%S') : 限制流量: $limit (原始: $TLIMIT, 容差: $TTOL, 模式: $MODE, iface: $IFACE)" | tee -a "$CRON_LOG"
-        else
-            echo "$(date '+%Y-%m-%d %H:%M:%S') : trafficcop.sh 返回空的限额数据" | tee -a "$CRON_LOG"
-        fi
+    if [[ -n "$TLIMIT" && -n "$TTOL" ]]; then
+        limit=$(echo "$TLIMIT - $TTOL" | bc 2>/dev/null || echo "未知")
+        limit="${limit} GB"
     else
-        rm -f "$tmp_limit_file"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : 无法读取限额配置 (trafficcop.sh 子 shell 失败)" | tee -a "$CRON_LOG"
+        limit="未知"
     fi
 
-    # ========= 构建 Telegram 消息 =========
+    # === 组装消息 ===
     local message="📊 [${MACHINE_NAME}] 每日流量报告%0A%0A🖥️ 机器总流量：%0A当前使用：${current_usage} GB%0A流量限制：${limit}"
 
-    echo "$(date '+%Y-%m-%d %H:%M:%S') : [调试] Telegram 消息内容:" | tee -a "$CRON_LOG"
-    echo "$(date '+%Y-%m-%d %H:%M:%S') : [调试] $message" | tee -a "$CRON_LOG"
-
-    local url="https://api.telegram.org/bot${BOT_TOKEN}/sendMessage"
-    local response
-
-    echo "$(date '+%Y-%m-%d %H:%M:%S') : 尝试发送 Telegram 消息" | tee -a "$CRON_LOG"
-    response=$(curl -s -X POST "$url" -d "chat_id=$CHAT_ID" -d "text=$message")
-
-    if echo "$response" | grep -q '"ok":true'; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : 每日报告发送成功" | tee -a "$CRON_LOG"
-        return 0
-    else
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : 每日报告发送失败. 响应: $response" | tee -a "$CRON_LOG"
-        return 1
-    fi
+    # === 发送 Telegram 消息 ===
+    curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+        -d "chat_id=$CHAT_ID" \
+        -d "text=$message" >/dev/null
 }
 
 
-
-# 获取当前总流量（返回纯数值，用于 daily_report）
 # 获取当前总流量（完全复用 Traffic_all 的结构）
 get_current_traffic() {
     if [ -f "$WORK_DIR/trafficcop.sh" ]; then
