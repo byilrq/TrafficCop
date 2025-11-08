@@ -278,25 +278,24 @@ daily_report() {
 
 # 获取当前流量信息
 get_current_traffic() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') : 开始获取当前流量信息" | tee -a "$CRON_LOG"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') : 开始获取当前流量信息" >> "$CRON_LOG"
     if [ -f "$WORK_DIR/trafficcop.sh" ]; then
         source "$WORK_DIR/trafficcop.sh" >/dev/null 2>&1
     else
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : 流量监控脚本 (trafficcop.sh) 不存在，无法获取流量信息" | tee -a "$CRON_LOG"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') : 流量监控脚本 (trafficcop.sh) 不存在，无法获取流量信息" >> "$CRON_LOG"
         return 1
     fi
-
     if read_config; then
         local current_usage=$(get_traffic_usage)
         local start_date=$(get_period_start_date)
         local end_date=$(get_period_end_date)
         local traffic_mode=$TRAFFIC_MODE
-        echo "$(date '+%Y-%m-%d %H:%M:%S') 当前周期: $start_date 到 $end_date" | tee -a "$CRON_LOG"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') 统计模式: $traffic_mode" | tee -a "$CRON_LOG"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') 当前流量使用: $current_usage GB" | tee -a "$CRON_LOG"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') 当前周期: $start_date 到 $end_date" >> "$CRON_LOG"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') 统计模式: $traffic_mode" >> "$CRON_LOG"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') 当前流量使用: $current_usage GB" >> "$CRON_LOG"
         echo "$current_usage"
     else
-        echo "$(date '+%Y-%m-%d %H:%M:%S') 配置加载失败，无法读取流量" | tee -a "$CRON_LOG"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') 配置加载失败，无法读取流量" >> "$CRON_LOG"
         return 1
     fi
 }
