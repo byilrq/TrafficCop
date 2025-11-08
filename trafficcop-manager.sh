@@ -270,7 +270,15 @@ update_all_scripts() {
 
 # 读取当前总流量  Traffic_all 函数：读取当前流量并打印，用于测试统计和记录
 Traffic_all() {
-    if read_config; then  # 加载配置（TRAFFIC_MODE, TRAFFIC_PERIOD 等）
+    if [ -f "$WORK_DIR/trafficcop.sh" ]; then
+        # Source the trafficcop.sh to load required functions (suppress output to avoid running main logic)
+        source "$WORK_DIR/trafficcop.sh" >/dev/null 2>&1
+    else
+        echo -e "${RED}流量监控脚本 (trafficcop.sh) 不存在，请先安装流量监控功能 (选项1)。${NC}"
+        return 1
+    fi
+
+    if read_config; then # 加载配置（TRAFFIC_MODE, TRAFFIC_PERIOD 等）
         local current_usage=$(get_traffic_usage)
         local start_date=$(get_period_start_date)
         local end_date=$(get_period_end_date)
@@ -332,7 +340,7 @@ main() {
             5)
                 view_logs
                 ;;
-            5)
+            6)
                 view_config
                 ;;
             7)
