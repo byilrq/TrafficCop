@@ -166,6 +166,22 @@ initial_config() {
         echo "时间格式不正确。请重新输入 (HH:MM): "
         read -r new_daily_report_time
     done
+    # VPS 到期时间
+    if [ -n "$EXPIRE_DATE" ]; then
+        echo "请输入 VPS 到期日期 [当前: $EXPIRE_DATE，格式 YYYY.MM.DD]: "
+    else
+        echo "请输入 VPS 到期日期 (格式: YYYY.MM.DD，例如 2026.10.20): "
+    fi
+    read -r new_expire_date
+    if [[ -z "$new_expire_date" ]] && [[ -n "$EXPIRE_DATE" ]]; then
+        new_expire_date="$EXPIRE_DATE"
+        echo " → 保留原配置"
+    fi
+    while [[ ! $new_expire_date =~ ^[0-9]{4}\.[0-1][0-9]\.[0-3][0-9]$ ]]; do
+        echo "日期格式不正确，请重新输入 (YYYY.MM.DD): "
+        read -r new_expire_date
+    done
+    
     # 更新配置文件（使用引号防止空格等特殊字符问题）
     BOT_TOKEN="$new_token"
     CHAT_ID="$new_chat_id"
@@ -236,17 +252,130 @@ update_cron_time() {
 }
 
 # 每日报告
+# ======================================
+# 修改 Telegram 通知配置
+# ======================================
+initial_config() {
+    echo "======================================"
+    echo " 修改 Telegram 通知配置"
+    echo "======================================"
+    echo ""
+    echo "提示：按 Enter 保留当前配置，输入新值则更新配置"
+    echo ""
+
+    local new_token new_chat_id new_machine_name new_daily_report_time new_expire_date
+
+    # Bot Token
+    if [ -n "$BOT_TOKEN" ]; then
+        local token_display="${BOT_TOKEN:0:10}...${BOT_TOKEN: -4}"
+        echo "请输入Telegram Bot Token [当前: $token_display]: "
+    else
+        echo "请输入Telegram Bot Token: "
+    fi
+    read -r new_token
+    if [[ -z "$new_token" ]] && [[ -n "$BOT_TOKEN" ]]; then
+        new_token="$BOT_TOKEN"
+        echo " → 保留原配置"
+    fi
+    while [[ -z "$new_token" ]]; do
+        echo "Bot Token 不能为空。请重新输入: "
+        read -r new_token
+    done
+
+    # Chat ID
+    if [ -n "$CHAT_ID" ]; then
+        echo "请输入Telegram Chat ID [当前: $CHAT_ID]: "
+    else
+        echo "请输入Telegram Chat ID: "
+    fi
+    read -r new_chat_id
+    if [[ -z "$new_chat_id" ]] && [[ -n "$CHAT_ID" ]]; then
+        new_chat_id="$CHAT_ID"
+        echo " → 保留原配置"
+    fi
+    while [[ -z "$new_chat_id" ]]; do
+        echo "Chat ID 不能为空。请重新输入: "
+        read -r new_chat_id
+    done
+
+    # 机器名称
+    if [ -n "$MACHINE_NAME" ]; then
+        echo "请输入机器名称 [当前: $MACHINE_NAME]: "
+    else
+        echo "请输入机器名称: "
+    fi
+    read -r new_machine_name
+    if [[ -z "$new_machine_name" ]] && [[ -n "$MACHINE_NAME" ]]; then
+        new_machine_name="$MACHINE_NAME"
+        echo " → 保留原配置"
+    fi
+    while [[ -z "$new_machine_name" ]]; do
+        echo "机器名称不能为空。请重新输入: "
+        read -r new_machine_name
+    done
+
+    # 每日报告时间
+    if [ -n "$DAILY_REPORT_TIME" ]; then
+        echo "请输入每日报告时间 [当前: $DAILY_REPORT_TIME，格式 HH:MM]: "
+    else
+        echo "请输入每日报告时间 (时区固定为东八区，输入格式为 HH:MM，例如 01:00): "
+    fi
+    read -r new_daily_report_time
+    if [[ -z "$new_daily_report_time" ]] && [[ -n "$DAILY_REPORT_TIME" ]]; then
+        new_daily_report_time="$DAILY_REPORT_TIME"
+        echo " → 保留原配置"
+    fi
+    while [[ ! $new_daily_report_time =~ ^([0-1][0-9]|2[0-3]):[0-5][0-9]$ ]]; do
+        echo "时间格式不正确。请重新输入 (HH:MM): "
+        read -r new_daily_report_time
+    done
+
+    # VPS 到期时间
+    if [ -n "$EXPIRE_DATE" ]; then
+        echo "请输入 VPS 到期日期 [当前: $EXPIRE_DATE，格式 YYYY.MM.DD]: "
+    else
+        echo "请输入 VPS 到期日期 (格式: YYYY.MM.DD，例如 2026.10.20): "
+    fi
+    read -r new_expire_date
+    if [[ -z "$new_expire_date" ]] && [[ -n "$EXPIRE_DATE" ]]; then
+        new_expire_date="$EXPIRE_DATE"
+        echo " → 保留原配置"
+    fi
+    while [[ ! $new_expire_date =~ ^[0-9]{4}\.[0-1][0-9]\.[0-3][0-9]$ ]]; do
+        echo "日期格式不正确，请重新输入 (YYYY.MM.DD): "
+        read -r new_expire_date
+    done
+
+    # === 更新配置文件 ===
+    BOT_TOKEN="$new_token"
+    CHAT_ID="$new_chat_id"
+    MACHINE_NAME="$new_machine_name"
+    DAILY_REPORT_TIME="$new_daily_report_time"
+    EXPIRE_DATE="$new_expire_date"
+
+    write_config
+
+    echo ""
+    echo "======================================"
+    echo "配置已更新成功！"
+    echo "======================================"
+    echo ""
+    read_config
+}
+
+
+# ======================================
+# 每日报告推送程序（保留原逻辑 + 增加剩余天数）
+# ======================================
 daily_report() {
     # === 获取当前流量信息 ===
     local raw_output
     raw_output=$(get_current_traffic)
 
-    # 提取关键字段
     local datetime=$(echo "$raw_output" | grep -m1 "当前周期" | cut -d' ' -f1)
     local period=$(echo "$raw_output" | grep "当前周期" | sed 's/.*当前周期: //')
     local usage=$(echo "$raw_output" | grep "当前流量使用" | sed 's/.*当前流量使用: //;s/ GB//')
 
-    # 若解析失败，使用默认值
     [ -z "$datetime" ] && datetime=$(date '+%Y-%m-%d %H:%M:%S')
     [ -z "$period" ] && period="未知"
     [ -z "$usage" ] && usage="未知"
@@ -262,14 +391,28 @@ daily_report() {
         limit="未知"
     fi
 
-    # === 构建精简消息 ===
-    local message="📊 [${MACHINE_NAME}] 每日流量报告%0A%0A🖥️ 机器总流量：%0A当前使用：${datetime}%0A当前周期: ${period}%0A当前流量使用: ${usage} GB%0A流量限制：${limit}"
+    # === 计算到期剩余天数 ===
+    local today=$(date '+%Y-%m-%d')
+    local expire_formatted=$(echo "$EXPIRE_DATE" | tr '.' '-')
+    local expire_ts=$(date -d "$expire_formatted" +%s 2>/dev/null)
+    local today_ts=$(date -d "$today" +%s)
+    local diff_days=$(( (expire_ts - today_ts) / 86400 ))
+
+    if (( diff_days < 0 )); then
+        diff_days="已过期"
+    else
+        diff_days="${diff_days}天"
+    fi
+
+    # === 构建消息 ===
+    local message="📊 [${MACHINE_NAME}] 每日流量报告%0A%0A🖥️ 机器总流量：%0A推送日期：$(date '+%Y-%m-%d')%0A剩余天数：${diff_days}%0A当前周期: ${period}%0A当前流量使用: ${usage} GB%0A流量限制：${limit}"
 
     # === 推送 Telegram ===
     curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
         -d "chat_id=$CHAT_ID" \
         -d "text=$message" >/dev/null
 }
+
 
 
 
