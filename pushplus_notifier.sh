@@ -71,14 +71,97 @@ EXPIRE_DATE="$EXPIRE_DATE"
 EOF
     echo "配置已保存到 $CONFIG_FILE"
 }
+# ============================================
+# PushPlus 初始化
+# ============================================
 
 initial_config() {
-    echo "==== PushPlus 初始化配置 ===="
-    read -p "请输入 PushPlus Token: " PUSHPLUS_TOKEN
-    read -p "请输入机器名称: " MACHINE_NAME
-    read -p "请输入每日报告时间 (HH:MM): " DAILY_REPORT_TIME
-    read -p "请输入 VPS 到期日期 (YYYY.MM.DD): " EXPIRE_DATE
+    echo "======================================"
+    echo " 修改 PushPlus 通知配置"
+    echo "======================================"
+    echo ""
+    echo "提示：按 Enter 保留当前配置，输入新值则更新配置"
+    echo ""
+
+    local new_token new_machine_name new_daily_report_time new_expire_date
+    # PushPlus Token
+    if [ -n "$PUSHPLUS_TOKEN" ]; then
+        # 隐藏部分Token显示
+        local token_display="${PUSHPLUS_TOKEN:0:10}...${PUSHPLUS_TOKEN: -4}"
+        echo "请输入 PushPlus Token [当前: $token_display]: "
+    else
+        echo "请输入 PushPlus Token: "
+    fi
+    read -r new_token
+    # 如果输入为空且有原配置，保留原配置
+    if [[ -z "$new_token" ]] && [[ -n "$PUSHPLUS_TOKEN" ]]; then
+        new_token="$PUSHPLUS_TOKEN"
+        echo " → 保留原配置"
+    fi
+    # 如果还是空（首次配置），要求必须输入
+    while [[ -z "$new_token" ]]; do
+        echo "PushPlus Token 不能为空。请重新输入: "
+        read -r new_token
+    done
+    # 机器名称
+    if [ -n "$MACHINE_NAME" ]; then
+        echo "请输入机器名称 [当前: $MACHINE_NAME]: "
+    else
+        echo "请输入机器名称: "
+    fi
+    read -r new_machine_name
+    if [[ -z "$new_machine_name" ]] && [[ -n "$MACHINE_NAME" ]]; then
+        new_machine_name="$MACHINE_NAME"
+        echo " → 保留原配置"
+    fi
+    while [[ -z "$new_machine_name" ]]; do
+        echo "机器名称不能为空。请重新输入: "
+        read -r new_machine_name
+    done
+    # 每日报告时间
+    if [ -n "$DAILY_REPORT_TIME" ]; then
+        echo "请输入每日报告时间 [当前: $DAILY_REPORT_TIME，格式 HH:MM]: "
+    else
+        echo "请输入每日报告时间 (时区固定为东八区，输入格式为 HH:MM，例如 01:00): "
+    fi
+    read -r new_daily_report_time
+    if [[ -z "$new_daily_report_time" ]] && [[ -n "$DAILY_REPORT_TIME" ]]; then
+        new_daily_report_time="$DAILY_REPORT_TIME"
+        echo " → 保留原配置"
+    fi
+    while [[ ! $new_daily_report_time =~ ^([0-1][0-9]|2[0-3]):[0-5][0-9]$ ]]; do
+        echo "时间格式不正确。请重新输入 (HH:MM): "
+        read -r new_daily_report_time
+    done
+    # VPS 到期时间
+    if [ -n "$EXPIRE_DATE" ]; then
+        echo "请输入 VPS 到期日期 [当前: $EXPIRE_DATE，格式 YYYY.MM.DD]: "
+    else
+        echo "请输入 VPS 到期日期 (格式: YYYY.MM.DD，例如 2026.10.20): "
+    fi
+    read -r new_expire_date
+    if [[ -z "$new_expire_date" ]] && [[ -n "$EXPIRE_DATE" ]]; then
+        new_expire_date="$EXPIRE_DATE"
+        echo " → 保留原配置"
+    fi
+    while [[ ! $new_expire_date =~ ^[0-9]{4}\.[0-1][0-9]\.[0-3][0-9]$ ]]; do
+        echo "日期格式不正确，请重新输入 (YYYY.MM.DD): "
+        read -r new_expire_date
+    done
+
+    # 更新配置文件
+    PUSHPLUS_TOKEN="$new_token"
+    MACHINE_NAME="$new_machine_name"
+    DAILY_REPORT_TIME="$new_daily_report_time"
+    EXPIRE_DATE="$new_expire_date"
     write_config
+
+    echo ""
+    echo "======================================"
+    echo "配置已更新成功！"
+    echo "======================================"
+    echo ""
+    read_config
 }
 
 # ============================================
