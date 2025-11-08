@@ -305,10 +305,9 @@ show_main_menu() {
     echo -e "${YELLOW}4) 安装/管理Server酱通知${NC}"
     echo -e "${YELLOW}5) 查看日志${NC}"
     echo -e "${YELLOW}6) 查看当前配置${NC}"
-    echo -e "${YELLOW}7) 使用预设配置${NC}"
-    echo -e "${YELLOW}8) 停止所有服务${NC}"
-    echo -e "${GREEN}9) 更新所有脚本到最新版本${NC}"
-    echo -e "${YELLOW}10) 读取当前使用流量${NC}"   
+    echo -e "${GREEN}7) 停止所有服务${NC}"
+    echo -e "${GREEN}8) 更新所有脚本到最新版本${NC}"
+    echo -e "${YELLOW}9) 读取当前使用流量${NC}"   
     echo -e "${YELLOW}0) 退出${NC}"
     echo -e "${PURPLE}====================================${NC}"
     echo ""
@@ -342,16 +341,14 @@ main() {
             6)
                 view_config
                 ;;
+
             7)
-                use_preset_config
-                ;;
-            8)
                 stop_all_services
                 ;;
-            9)
+            8)
                 update_all_scripts
                 ;;
-            10)
+            9)
                 Traffic_all
                 ;;
             0)
