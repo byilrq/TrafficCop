@@ -250,8 +250,7 @@ update_all_scripts() {
     echo -e "${CYAN}正在更新所有脚本到最新版本...${NC}"
     
     local scripts=("trafficcop.sh" "tg_notifier.sh" "pushplus_notifier.sh" "serverchan_notifier.sh" 
-                  "port_traffic_limit.sh" "view_port_traffic.sh" "port_traffic_helper.sh" 
-                  "remove_traffic_limit.sh" "machine_limit_manager.sh")
+)
     
     for script in "${scripts[@]}"; do
         if curl -fsSL "$REPO_URL/$script" -o "$WORK_DIR/$script.new" 2>/dev/null; then
