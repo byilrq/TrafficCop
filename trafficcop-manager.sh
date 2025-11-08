@@ -268,6 +268,21 @@ update_all_scripts() {
 }
 
 
+# 读取当前总流量  Traffic_all 函数：读取当前流量并打印，用于测试统计和记录
+Traffic_all() {
+    if read_config; then  # 加载配置（TRAFFIC_MODE, TRAFFIC_PERIOD 等）
+        local current_usage=$(get_traffic_usage)
+        local start_date=$(get_period_start_date)
+        local end_date=$(get_period_end_date)
+        echo "$(date '+%Y-%m-%d %H:%M:%S') 当前周期: $start_date 到 $end_date"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') 统计模式: $TRAFFIC_MODE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') 当前流量使用: $current_usage GB"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') 测试记录: vnstat 数据库路径 /var/lib/vnstat/$MAIN_INTERFACE (检查文件修改时间以验证更新)"
+    else
+        echo "$(date '+%Y-%m-%d %H:%M:%S') 配置加载失败，无法读取流量"
+    fi
+}
+
 # 显示主菜单
 show_main_menu() {
     clear
@@ -286,6 +301,7 @@ show_main_menu() {
     echo -e "${YELLOW}7) 使用预设配置${NC}"
     echo -e "${YELLOW}8) 停止所有服务${NC}"
     echo -e "${GREEN}9) 更新所有脚本到最新版本${NC}"
+    echo -e "${GREEN}10) 读取当前使用流量${NC}"   
     echo -e "${YELLOW}0) 退出${NC}"
     echo -e "${PURPLE}====================================${NC}"
     echo ""
@@ -327,6 +343,9 @@ main() {
                 ;;
             9)
                 update_all_scripts
+                ;;
+            10)
+                Traffic_all
                 ;;
             0)
                 echo -e "${GREEN}感谢使用TrafficCop管理工具！${NC}"
