@@ -66,16 +66,15 @@ get_valid_input() {
         fi
     done
 }
+
 # 读取配置
 read_config() {
     if [ ! -f "$CONFIG_FILE" ] || [ ! -s "$CONFIG_FILE" ]; then
         echo "配置文件不存在或为空，需要进行初始化配置。"
         return 1
     fi
-    # 读取配置文件
     source "$CONFIG_FILE"
-    # 检查必要的配置项是否都存在
-    if [ -z "$BOT_TOKEN" ] || [ -z "$CHAT_ID" ] || [ -z "$MACHINE_NAME" ] || [ -z "$DAILY_REPORT_TIME" ]; then
+    if [ -z "$BOT_TOKEN" ] || [ -z "$CHAT_ID" ] || [ -z "$MACHINE_NAME" ] || [ -z "$DAILY_REPORT_TIME" ] || [ -z "$EXPIRE_DATE" ]; then
         echo "配置文件不完整，需要重新进行配置。"
         return 1
     fi
@@ -88,6 +87,7 @@ BOT_TOKEN="$BOT_TOKEN"
 CHAT_ID="$CHAT_ID"
 DAILY_REPORT_TIME="$DAILY_REPORT_TIME"
 MACHINE_NAME="$MACHINE_NAME"
+EXPIRE_DATE="$EXPIRE_DATE"
 EOF
     echo "配置已保存到 $CONFIG_FILE"
 }
@@ -403,11 +403,11 @@ if [[ -z "$expire_ts" || -z "$today_ts" ]]; then
 else
     local diff_days=$(( (expire_ts - today_ts) / 86400 ))
     if (( diff_days < 30 )); then
-        diff_days="已过期"
+        diff_days="(即将到期，尽快续费)"
         diff_emoji="🔴"
     elif (( diff_days <= 60 )); then
         diff_emoji="🟡"
-        diff_days="${diff_days}天 (即将到期)"
+        diff_days="${diff_days}天 "
     else
         diff_emoji="🟢"
         diff_days="${diff_days}天"
