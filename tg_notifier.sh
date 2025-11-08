@@ -236,32 +236,30 @@ update_cron_time() {
 }
 
 # 每日报告
-# ===============================
-# 每日报告函数（安全版）
-# - 所有 trafficcop.sh 操作均在独立子 shell 内执行
-# - 防止父 shell 环境污染
-# - 含空值与超时保护
-# ===============================
 daily_report() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') : 开始生成每日报告" | tee -a "$CRON_LOG"
     echo "$(date '+%Y-%m-%d %H:%M:%S') : DAILY_REPORT_TIME=$DAILY_REPORT_TIME" | tee -a "$CRON_LOG"
     echo "$(date '+%Y-%m-%d %H:%M:%S') : BOT_TOKEN=${BOT_TOKEN:0:5}... CHAT_ID=$CHAT_ID" | tee -a "$CRON_LOG"
     echo "$(date '+%Y-%m-%d %H:%M:%S') : 日志文件路径: $LOG_FILE" | tee -a "$CRON_LOG"
 
-    # ========= 获取当前流量 =========
+    # ========= 直接调用 get_current_traffic =========
     local current_usage
     current_usage=$(get_current_traffic)
-    if [ $? -ne 0 ] || [ -z "$current_usage" ] || [ "$current_usage" = "未知" ]; then
+
+    # 检查执行结果
+    if [ $? -ne 0 ] || [ -z "$current_usage" ]; then
         echo "$(date '+%Y-%m-%d %H:%M:%S') : 获取最新流量失败或为空，设置为 未知" | tee -a "$CRON_LOG"
         current_usage="未知"
+    else
+        echo "$(date '+%Y-%m-%d %H:%M:%S') : 当前流量使用: ${current_usage} GB" | tee -a "$CRON_LOG"
     fi
 
-    # ========= 在子 shell 读取限额配置 =========
+    # ========= 获取限额信息 =========
     local tmp_limit_file
     tmp_limit_file=$(mktemp /tmp/tlimits_XXXXXX)
+
     bash -c "
-        set -e
-        source '$WORK_DIR/trafficcop.sh' >/dev/null 2>&1 || true
+        source '$WORK_DIR/trafficcop.sh' >/dev/null 2>&1 || exit 1
         if read_config >/dev/null 2>&1; then
             echo \"\$TRAFFIC_LIMIT|\$TRAFFIC_TOLERANCE|\$TRAFFIC_MODE|\$MAIN_INTERFACE\"
         fi
@@ -283,15 +281,16 @@ daily_report() {
         echo "$(date '+%Y-%m-%d %H:%M:%S') : 无法读取限额配置 (trafficcop.sh 子 shell 失败)" | tee -a "$CRON_LOG"
     fi
 
-    # ========= 构建并发送 Telegram 消息 =========
-    local message="📊 [${MACHINE_NAME}]每日流量报告%0A%0A🖥️ 机器总流量：%0A当前使用：${current_usage} GB%0A流量限制：${limit}"
+    # ========= 构建 Telegram 消息 =========
+    local message="📊 [${MACHINE_NAME}] 每日流量报告%0A%0A🖥️ 机器总流量：%0A当前使用：${current_usage} GB%0A流量限制：${limit}"
 
-    echo "$(date '+%Y-%m-%d %H:%M:%S') : [调试] 发送到TG的消息内容:" | tee -a "$CRON_LOG"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') : [调试] Telegram 消息内容:" | tee -a "$CRON_LOG"
     echo "$(date '+%Y-%m-%d %H:%M:%S') : [调试] $message" | tee -a "$CRON_LOG"
 
     local url="https://api.telegram.org/bot${BOT_TOKEN}/sendMessage"
     local response
-    echo "$(date '+%Y-%m-%d %H:%M:%S') : 尝试发送Telegram消息" | tee -a "$CRON_LOG"
+
+    echo "$(date '+%Y-%m-%d %H:%M:%S') : 尝试发送 Telegram 消息" | tee -a "$CRON_LOG"
     response=$(curl -s -X POST "$url" -d "chat_id=$CHAT_ID" -d "text=$message")
 
     if echo "$response" | grep -q '"ok":true'; then
@@ -302,6 +301,7 @@ daily_report() {
         return 1
     fi
 }
+
 
 
 # 获取当前总流量（返回纯数值，用于 daily_report）
