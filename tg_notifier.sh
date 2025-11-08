@@ -361,37 +361,43 @@ if [[ "$*" == *"-cron"* ]]; then
         
 # "修正当前流量"
 correct_traffic() {
+    # === 自动加载配置，确定接口 ===
+    source "$WORK_DIR/trafficcop.sh" >/dev/null 2>&1 || {
+        echo "❌ 未找到 trafficcop.sh"
+        return 1
+    }
+    if ! read_config >/dev/null 2>&1; then
+        echo "❌ 无法读取配置，请先配置 trafficcop.sh"
+        return 1
+    fi
+
+    local iface="$MAIN_INTERFACE"
     local db_path="/var/lib/vnstat/vnstat.db"
 
+    if [ -z "$iface" ]; then
+        echo "❌ 未检测到 MAIN_INTERFACE，请检查 trafficcop.sh 配置"
+        return 1
+    fi
+
     if [ ! -f "$db_path" ]; then
-        echo "❌ 未找到数据库文件: $db_path"
+        echo "❌ 数据库不存在: $db_path"
         return 1
     fi
 
     if ! command -v sqlite3 >/dev/null 2>&1; then
-        echo "❌ sqlite3 未安装，请执行: apt install sqlite3"
+        echo "❌ 未安装 sqlite3，请执行: apt install sqlite3"
         return 1
     fi
 
-    # === 显示当前接口列表 ===
-    echo "当前接口列表:"
-    sqlite3 "$db_path" "SELECT id, name FROM interface;"
-    echo
-    read -p "请输入要修正的接口名称: " iface
+    echo "当前接口: $iface"
 
-    # === 确认接口存在 ===
-    local iface_id
-    iface_id=$(sqlite3 "$db_path" "SELECT id FROM interface WHERE name='$iface';")
-    if [ -z "$iface_id" ]; then
-        echo "❌ 接口 '$iface' 未找到。"
-        return 1
-    fi
+    # === 显示当前统计值 ===
+    sqlite3 "$db_path" "SELECT totalrx, totaltx FROM interface WHERE name='$iface';"
 
-    # === 显示当前统计 ===
-    sqlite3 "$db_path" "SELECT totalrx, totaltx FROM interface WHERE id=$iface_id;"
-    echo
-    read -p "请输入新的接收流量值 (GiB): " new_rx
-    read -p "请输入新的发送流量值 (GiB): " new_tx
+    # === 输入新值 ===
+    read -p "请输入新的接收流量 (GiB): " new_rx
+    read -p "请输入新的发送流量 (GiB，可选，默认0): " new_tx
+    [ -z "$new_tx" ] && new_tx=0
 
     if [[ -z "$new_rx" ]]; then
         echo "未输入新值，已取消。"
@@ -403,16 +409,14 @@ correct_traffic() {
     rx_mb=$(awk "BEGIN{print $new_rx*1024}")
     tx_mb=$(awk "BEGIN{print $new_tx*1024}")
 
-    sqlite3 "$db_path" "UPDATE interface SET totalrx=$rx_mb, totaltx=$tx_mb WHERE id=$iface_id;"
-    echo "✅ 已更新数据库。"
+    sqlite3 "$db_path" "UPDATE interface SET totalrx=$rx_mb, totaltx=$tx_mb WHERE name='$iface';"
 
-    # === 刷新 vnstat 缓存 ===
+    echo "✅ 已修正 $iface 流量: RX=${new_rx} GiB, TX=${new_tx} GiB"
+    echo "正在刷新 vnStat 缓存..."
     systemctl restart vnstat >/dev/null 2>&1
-    sleep 1
     vnstat --update -i "$iface" >/dev/null 2>&1
-    echo "✅ 已刷新 vnStat 数据。"
 
-    # === 显示修正后结果 ===
+    echo "✅ 当前统计："
     vnstat -i "$iface"
 }
 
