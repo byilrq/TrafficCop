@@ -286,36 +286,43 @@ get_current_traffic() {
         return 1
     fi
 
-    # 使用 mktemp 创建唯一临时文件
     local tmpfile
     tmpfile=$(mktemp /tmp/current_usage_XXXXXX)
 
-    # ✅ 启动子 bash 进程（后台运行）
+    # ✅ 启动子 bash（后台运行），强制无缓存执行
     bash -c "
+        set -e
+        unset TRAFFIC_MODE TRAFFIC_LIMIT TRAFFIC_TOLERANCE MAIN_INTERFACE
         source '$WORK_DIR/trafficcop.sh' >/dev/null 2>&1
+
+        # 强制刷新 vnstat 数据库（防止读取旧值）
+        vnstat --update -i \"\$MAIN_INTERFACE\" >/dev/null 2>&1
+
+        # 再读取配置和流量
         if read_config; then
-            vnstat --update -i \"\$MAIN_INTERFACE\" >/dev/null 2>&1
-            usage=\$(get_traffic_usage)
-            echo \"\$usage\" > '$tmpfile'
+            usage=\$(get_traffic_usage 2>/dev/null)
+            if [ -n \"\$usage\" ]; then
+                echo \"\$usage\" > '$tmpfile'
+            fi
         fi
     " &
     local child_pid=$!
 
-    # ✅ 等待子进程，最多 6 秒
+    # ✅ 超时保护（6 秒内必须退出）
     local timeout=6
     local waited=0
     while kill -0 "$child_pid" 2>/dev/null; do
         sleep 1
         waited=$((waited + 1))
         if [ $waited -ge $timeout ]; then
-            echo "$(date '+%Y-%m-%d %H:%M:%S') : 超时 ${timeout}s，强制终止子进程 PID=$child_pid" >> "$CRON_LOG"
+            echo "$(date '+%Y-%m-%d %H:%M:%S') : 超时 ${timeout}s，强制终止 PID=$child_pid" >> "$CRON_LOG"
             kill -9 "$child_pid" 2>/dev/null
             rm -f "$tmpfile"
             return 1
         fi
     done
 
-    # ✅ 子进程退出后，检查结果
+    # ✅ 检查结果
     if [ -s "$tmpfile" ]; then
         local usage
         usage=$(tr -d '\r\n ' < "$tmpfile")
@@ -324,7 +331,7 @@ get_current_traffic() {
         echo "$usage"
         return 0
     else
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : 获取流量失败或输出为空" >> "$CRON_LOG"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') : 未获取到流量数据或 trafficcop 返回空" >> "$CRON_LOG"
         rm -f "$tmpfile"
         return 1
     fi
