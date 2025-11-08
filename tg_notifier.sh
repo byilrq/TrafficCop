@@ -279,24 +279,24 @@ daily_report() {
 # 获取当前总流量（返回纯数值，用于 daily_report）
 # 获取当前总流量（返回纯数值，用于 daily_report）
 get_current_traffic() {
-    # 写日志头
     echo "$(date '+%Y-%m-%d %H:%M:%S') : 开始获取当前流量信息" >> "$CRON_LOG"
 
-    # 检查 trafficcop 脚本是否存在
-    if [ ! -f "$WORK_DIR/trafficcop.sh" ]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : 流量监控脚本 (trafficcop.sh) 不存在" >> "$CRON_LOG"
-        return 1
-    fi
-
-    # 在独立子 Shell 中执行，防止变量污染
     local tmpfile="$WORK_DIR/.current_usage.tmp"
     rm -f "$tmpfile" 2>/dev/null
 
+    # 确认脚本存在
+    if [ ! -f "$WORK_DIR/trafficcop.sh" ]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') : trafficcop.sh 不存在" >> "$CRON_LOG"
+        return 1
+    fi
+
+    # 在子 Shell 执行以防环境污染
     (
         source "$WORK_DIR/trafficcop.sh" >/dev/null 2>&1
 
         if read_config; then
-            local current_usage=$(get_traffic_usage)
+            local current_usage
+            current_usage=$(get_traffic_usage)
             local start_date=$(get_period_start_date)
             local end_date=$(get_period_end_date)
             local traffic_mode=$TRAFFIC_MODE
@@ -305,29 +305,29 @@ get_current_traffic() {
                 echo "$(date '+%Y-%m-%d %H:%M:%S') 当前周期: $start_date 到 $end_date"
                 echo "$(date '+%Y-%m-%d %H:%M:%S') 统计模式: $traffic_mode"
                 echo "$(date '+%Y-%m-%d %H:%M:%S') 当前流量使用: $current_usage GB"
-                echo "$(date '+%Y-%m-%d %H:%M:%S') 测试记录: vnstat 数据库路径 /var/lib/vnstat/$MAIN_INTERFACE"
             } >> "$CRON_LOG"
 
-            # ✅ 只输出数值到临时文件（不要时间戳，不要文字）
             echo "$current_usage" > "$tmpfile"
         else
             echo "$(date '+%Y-%m-%d %H:%M:%S') 配置加载失败" >> "$CRON_LOG"
-            exit 1
+            # ⚠️ 使用 return 而不是 exit，防止阻塞外层 shell
+            return 1
         fi
     )
 
-    # 从临时文件读取结果
+    # 子 Shell 执行结束后，外层继续执行
     if [ -s "$tmpfile" ]; then
-        local result
-        result=$(cat "$tmpfile" | tr -d '\r\n ')
+        local usage
+        usage=$(cat "$tmpfile" | tr -d '\r\n ')
         rm -f "$tmpfile"
-        echo "$result"
+        echo "$usage"
         return 0
     else
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : 获取流量失败，无输出" >> "$CRON_LOG"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') : 未获取到流量数据" >> "$CRON_LOG"
         return 1
     fi
 }
+
 
 
 
