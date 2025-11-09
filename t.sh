@@ -86,7 +86,18 @@ install_pushplus_notifier() {
         fi
     fi
     run_script "$WORK_DIR/pushplus_notifier.sh"
-    echo -e "${GREEN}PushPlus通知功能安装完成！${NC}"
+        ret=$?
+    case $ret in
+        99)
+            echo "PushPlus通知功能已停止。"
+            ;;
+        0)
+            echo "PushPlus通知功能安装完成！"
+            ;;
+        *)
+            echo "PushPlus通知脚本执行异常（返回码：$ret）"
+            ;;
+    esac
     read -p "按回车键继续..."
 }
 
