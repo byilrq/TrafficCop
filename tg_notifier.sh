@@ -396,23 +396,28 @@ local today=$(date '+%Y-%m-%d')
 local expire_formatted=$(echo "$EXPIRE_DATE" | tr '.' '-')
 local expire_ts=$(date -d "${expire_formatted} 00:00:00" +%s 2>/dev/null)
 local today_ts=$(date -d "${today} 00:00:00" +%s 2>/dev/null)
+local diff_days diff_emoji
 
 if [[ -z "$expire_ts" || -z "$today_ts" ]]; then
     diff_days="未知"
     diff_emoji="⚫"
 else
-    local diff_days=$(( (expire_ts - today_ts) / 86400 ))
-    if (( diff_days < 30 )); then
-        diff_days="(即将到期，尽快续费)"
+    diff_days=$(( (expire_ts - today_ts) / 86400 ))
+    if (( diff_days < 0 )); then
+        diff_emoji="⚫"
+        diff_days="$((-diff_days))天前（已过期）"
+    elif (( diff_days <= 30 )); then
         diff_emoji="🔴"
+        diff_days="${diff_days}天（即将到期，请尽快续费）"
     elif (( diff_days <= 60 )); then
         diff_emoji="🟡"
-        diff_days="${diff_days}天 "
+        diff_days="${diff_days}天（注意续费）"
     else
         diff_emoji="🟢"
         diff_days="${diff_days}天"
     fi
 fi
+
 
 
     # === 构建美化消息 ===
