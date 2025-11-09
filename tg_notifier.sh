@@ -620,7 +620,7 @@ else
                     echo "正在实时查询并推送当前流量..."
                     get_current_traffic
                     ;;
-               6)
+                7)
                     echo "正在停止tg推送..."
                     tgpush_stop
                     ;;         
