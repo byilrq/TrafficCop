@@ -424,8 +424,8 @@ fi
     local message="🖥️ [${MACHINE_NAME}] 每日报告%0A%0A"
     message+="🕒推送日期：$(date '+%Y-%m-%d')%0A"
     message+="${diff_emoji}剩余天数：${diff_days}%0A"
-    message+="📅当前周期: ${period}%0A"
-    message+="⌛已用流量: ${usage} GB%0A"
+    message+="📅当前周期：${period}%0A"
+    message+="⌛已用流量：${usage} GB%0A"
     message+="🌐流量套餐：${limit}"
 
     # === 推送 Telegram ===
