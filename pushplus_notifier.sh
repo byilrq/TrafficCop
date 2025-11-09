@@ -296,19 +296,19 @@ pushplus_stop() {
     fi
     
     # 可选：删除配置文件以防止进一步运行（如果需要完全禁用）
-    # if [ -f "$CONFIG_FILE" ]; then
-    #     rm -f "$CONFIG_FILE"
-    #     echo "$(date '+%Y-%m-%d %H:%M:%S') : ✅ 配置文件已删除。" | tee -a "$CRON_LOG"
-    # fi
+    if [ -f "$CONFIG_FILE" ]; then
+         rm -f "$CONFIG_FILE"
+         echo "$(date '+%Y-%m-%d %H:%M:%S') : ✅ 配置文件已删除。" | tee -a "$CRON_LOG"
+     fi
     
     # 可选：删除日志文件（如果需要清理）
-    # if [ -f "$CRON_LOG" ]; then
-    #     rm -f "$CRON_LOG"
-    #     echo "$(date '+%Y-%m-%d %H:%M:%S') : ✅ 日志文件已删除。" | tee -a "$CRON_LOG"
-    # fi
+     if [ -f "$CRON_LOG" ]; then
+         rm -f "$CRON_LOG"
+         echo "$(date '+%Y-%m-%d %H:%M:%S') : ✅ 日志文件已删除。" | tee -a "$CRON_LOG"
+     fi
     
     echo "$(date '+%Y-%m-%d %H:%M:%S') : ✅ PushPlus 推送功能已停止。" | tee -a "$CRON_LOG"
-    exit 0
+    exit 99
 }
 
 # ============================================
