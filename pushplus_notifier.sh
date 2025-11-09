@@ -229,23 +229,28 @@ local today=$(date '+%Y-%m-%d')
 local expire_formatted=$(echo "$EXPIRE_DATE" | tr '.' '-')
 local expire_ts=$(date -d "${expire_formatted} 00:00:00" +%s 2>/dev/null)
 local today_ts=$(date -d "${today} 00:00:00" +%s 2>/dev/null)
+local diff_days diff_emoji
 
 if [[ -z "$expire_ts" || -z "$today_ts" ]]; then
     diff_days="未知"
     diff_emoji="⚫"
 else
-    local diff_days=$(( (expire_ts - today_ts) / 86400 ))
-    if (( diff_days < 30 )); then
-        diff_days="(即将到期)"
+    diff_days=$(( (expire_ts - today_ts) / 86400 ))
+    if (( diff_days < 0 )); then
+        diff_emoji="⚫"
+        diff_days="$((-diff_days))天前（已过期）"
+    elif (( diff_days <= 30 )); then
         diff_emoji="🔴"
+        diff_days="${diff_days}天（即将到期，请尽快续费）"
     elif (( diff_days <= 60 )); then
         diff_emoji="🟡"
-        diff_days="${diff_days}天"
+        diff_days="${diff_days}天（注意续费）"
     else
         diff_emoji="🟢"
         diff_days="${diff_days}天"
     fi
 fi
+
 
 
     # === 拼接消息 ===
@@ -336,7 +341,7 @@ main() {
             echo "===== PushPlus 菜单 ====="
             echo "1. 发送每日报告"
             echo "2. 发送测试消息"
-            echo "3. 实时流量"
+            echo "3. 打印实时流量"
             echo "4. 修改配置"
             echo "5. 停止运行"
             echo "0. 退出"
