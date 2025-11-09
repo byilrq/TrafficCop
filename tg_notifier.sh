@@ -7,6 +7,15 @@ CONFIG_FILE="$WORK_DIR/tg_notifier_config.txt"
 LOG_FILE="$WORK_DIR/traffic_monitor.log"
 SCRIPT_PATH="$WORK_DIR/tg_notifier.sh"
 CRON_LOG="$WORK_DIR/tg_notifier_cron.log"
+
+RED="\033[31m"
+GREEN="\033[32m"
+YELLOW="\033[33m"
+PLAIN="\033[0m"
+hui='\e[37m'
+lan='\033[34m'
+zi='\033[35m'
+
 # 文件迁移函数
 migrate_files() {
     # 迁移配置文件
@@ -565,25 +574,25 @@ else
 # 显示菜单
 while true; do
     clear
-    echo "======================================"
-    echo " Telegram 通知脚本管理菜单"
-    echo "======================================"
-    echo "当前配置摘要："
-    echo "机器名称: $MACHINE_NAME"
-    echo "每日报告时间: $DAILY_REPORT_TIME"
-    echo "Bot Token: ${BOT_TOKEN:0:10}..."
-    echo "Chat ID: $CHAT_ID"
-    echo "======================================"
-    echo "1. 手动发送每日报告"
-    echo "2. 发送测试消息"
-    echo "3. 重新加载配置"
-    echo "4. 修改配置"
-    echo "5. 实时查询并推送当前流量"
-    echo "6. 实时查询当前流量"
-    echo "7. 停止推送"
-    echo "0. 退出"
-    echo "======================================"
-    read -rp "请选择操作 [0-7]: " choice   # ✅ 改成 [0-7] 并用 -r 防止转义字符
+    echo -e "${BLUE}======================================${PLAIN}"
+    echo -e "${PURPLE}        Telegram 通知脚本管理菜单${PLAIN}"
+    echo -e "${BLUE}======================================${PLAIN}"
+    echo -e "${YELLOW}当前配置摘要：${PLAIN}"
+    echo -e "  ${WHITE}机器名称:${PLAIN} ${GREEN}$MACHINE_NAME${PLAIN}"
+    echo -e "  ${WHITE}每日报告时间:${PLAIN} ${GREEN}$DAILY_REPORT_TIME${PLAIN}"
+    echo -e "  ${WHITE}Bot Token:${PLAIN} ${CYAN}${BOT_TOKEN:0:10}...${PLAIN}"
+    echo -e "  ${WHITE}Chat ID:${PLAIN} ${CYAN}$CHAT_ID${PLAIN}"
+    echo -e "${BLUE}======================================${PLAIN}"
+    echo -e "${GREEN}1.${PLAIN} 手动发送${YELLOW}每日报告${PLAIN}"
+    echo -e "${GREEN}2.${PLAIN} 发送${YELLOW}测试消息${PLAIN}"
+    echo -e "${GREEN}3.${PLAIN} 重新${CYAN}加载配置${PLAIN}"
+    echo -e "${GREEN}4.${PLAIN} 修改${PURPLE}配置参数${PLAIN}"
+    echo -e "${GREEN}5.${PLAIN} 实时${YELLOW}查询并推送${PLAIN}${CYAN}当前流量${PLAIN}"
+    echo -e "${GREEN}6.${PLAIN} 实时${YELLOW}查询${PLAIN}${CYAN}当前流量${PLAIN}"
+    echo -e "${RED}7.${PLAIN} 停止推送"
+    echo -e "${WHITE}0.${PLAIN} 退出"
+    echo -e "${BLUE}======================================${PLAIN}"
+    read -rp "请选择操作 [${YELLOW}0-7${PLAIN}]: " choice
     echo
 
     case "$choice" in
