@@ -14,6 +14,16 @@ SCRIPT_PATH="$WORK_DIR/pushplus_notifier.sh"
 CRON_LOG="$WORK_DIR/pushplus_notifier_cron.log"
 LAST_NOTIFICATION_FILE="$WORK_DIR/last_notification_status.txt"
 
+# ================== 彩色定义 ==================
+RED="\033[31m"      # 红色
+GREEN="\033[32m"    # 绿色
+YELLOW="\033[33m"   # 黄色
+BLUE="\033[34m"     # 蓝色
+PURPLE="\033[35m"   # 紫色
+CYAN="\033[36m"     # 青色
+WHITE="\033[37m"    # 白色
+PLAIN="\033[0m"     # 还原默认颜色
+
 # ============================================
 # 文件迁移
 # ============================================
@@ -369,16 +379,20 @@ main() {
         fi
         setup_cron
 
-        while true; do
-            clear
-            echo "===== PushPlus 菜单 ====="
-            echo "1. 发送每日报告"
-            echo "2. 发送测试消息"
-            echo "3. 打印实时流量"
-            echo "4. 修改配置"
-            echo "5. 停止运行"
-            echo "0. 退出"
-            read -p "请选择: " choice
+while true; do
+    clear
+    echo -e "${BLUE}======================================${PLAIN}"
+    echo -e "${PURPLE}           PushPlus 管理菜单${PLAIN}"
+    echo -e "${BLUE}======================================${PLAIN}"
+    echo -e "${GREEN}1.${PLAIN} 发送${YELLOW}每日报告${PLAIN}"
+    echo -e "${GREEN}2.${PLAIN} 发送${CYAN}测试消息${PLAIN}"
+    echo -e "${GREEN}3.${PLAIN} 打印${YELLOW}实时流量${PLAIN}"
+    echo -e "${GREEN}4.${PLAIN} 修改${PURPLE}配置${PLAIN}"
+    echo -e "${RED}5.${PLAIN} 停止运行"
+    echo -e "${WHITE}0.${PLAIN} 退出"
+    echo -e "${BLUE}======================================${PLAIN}"
+    read -rp "请选择操作 [${YELLOW}0-5${PLAIN}]: " choice
+    echo
             case $choice in
                 1) daily_report ;;
                 2) test_pushplus_notification ;;
