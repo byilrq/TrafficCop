@@ -286,9 +286,9 @@ Traffic_all() {
 # 显示主菜单
 show_main_menu() {
     clear
-    echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║         TrafficCop 管理工具            ║${NC}"
-    echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+    echo -e "${BLUE}════════════════════════════════════════${NC}"
+    echo -e "${BLUE}        TrafficCop 管理工具              ${NC}"
+    echo -e "${BLUE}════════════════════════════════════════${NC}"
     echo -e "${PURPLE}====================================${NC}"
     echo ""
     echo -e "${YELLOW}1) 安装/管理流量监控${NC}"
