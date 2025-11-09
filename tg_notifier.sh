@@ -531,31 +531,37 @@ if [[ "$*" == *"-cron"* ]]; then
     if read_config; then
         echo "$(date '+%Y-%m-%d %H:%M:%S') : 成功读取配置文件" >> "$CRON_LOG"
        
-    # 检查是否需要发送每日报告
-    current_time=$(TZ='Asia/Shanghai' date +%H:%M)
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : 当前时间: $current_time, 设定的报告时间: $DAILY_REPORT_TIME" >> "$CRON_LOG"
-        if [ "$current_time" == "$DAILY_REPORT_TIME" ]; then
-            echo "$(date '+%Y-%m-%d %H:%M:%S') : 时间匹配，准备发送每日报告" >> "$CRON_LOG"
-            if daily_report; then
-                echo "$(date '+%Y-%m-%d %H:%M:%S') : 每日报告发送成功" >> "$CRON_LOG"
-            else
-                echo "$(date '+%Y-%m-%d %H:%M:%S') : 每日报告发送失败" >> "$CRON_LOG"
-            fi
-        else
-            echo "$(date '+%Y-%m-%d %H:%M:%S') : 当前时间与报告时间不匹配，不发送报告" >> "$CRON_LOG"
-        fi
+
+# 检查是否需要发送每日报告
+current_time=$(TZ='Asia/Shanghai' date +%H:%M)
+echo "$(date '+%Y-%m-%d %H:%M:%S') : 当前时间: $current_time, 设定的报告时间: $DAILY_REPORT_TIME" >> "$CRON_LOG"
+
+if [ "$current_time" == "$DAILY_REPORT_TIME" ]; then
+    # === 新增逻辑：清空旧日志，保持每天新日志 ===
+    echo "$(date '+%Y-%m-%d %H:%M:%S') : 时间匹配，清空旧日志以生成新日报日志。" > "$CRON_LOG"
+
+    echo "$(date '+%Y-%m-%d %H:%M:%S') : 时间匹配，准备发送每日报告" >> "$CRON_LOG"
+    if daily_report; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') : 每日报告发送成功" >> "$CRON_LOG"
     else
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : 配置文件不存在或不完整，跳过检查" >> "$CRON_LOG"
-        exit 1
+        echo "$(date '+%Y-%m-%d %H:%M:%S') : 每日报告发送失败" >> "$CRON_LOG"
     fi
-    else
-        # 菜单模式 (替换原来的交互模式)
-        if ! read_config; then
-            echo "需要进行初始化配置。"
-            initial_config
-        fi
-       
-        setup_cron
+else
+    echo "$(date '+%Y-%m-%d %H:%M:%S') : 当前时间与报告时间不匹配，不发送报告" >> "$CRON_LOG"
+fi
+else
+    echo "$(date '+%Y-%m-%d %H:%M:%S') : 配置文件不存在或不完整，跳过检查" >> "$CRON_LOG"
+    exit 1
+fi
+else
+    # 菜单模式 (替换原来的交互模式)
+    if ! read_config; then
+        echo "需要进行初始化配置。"
+        initial_config
+    fi
+
+    setup_cron
+
  
 
 # 显示菜单
