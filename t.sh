@@ -90,38 +90,12 @@ install_pushplus_notifier() {
     read -p "按回车键继续..."
 }
 
-# 安装Server酱通知
-install_serverchan_notifier() {
-    echo -e "${CYAN}正在安装Server酱通知功能...${NC}"
-    
-    # 检查serverchan_notifier.sh是否在仓库中，如果不在，使用本地的
-    if curl -s --head "$REPO_URL/serverchan_notifier.sh" | grep "HTTP/2 200\|HTTP/1.1 200" > /dev/null; then
-        install_script "serverchan_notifier.sh"
-    else
-        echo -e "${YELLOW}从仓库下载失败，使用本地文件...${NC}"
-        # 复制当前目录下的serverchan_notifier.sh到工作目录
-        if [ -f "serverchan_notifier.sh" ]; then
-            cp "serverchan_notifier.sh" "$WORK_DIR/serverchan_notifier.sh"
-            chmod +x "$WORK_DIR/serverchan_notifier.sh"
-        else
-            echo -e "${RED}本地serverchan_notifier.sh文件不存在！${NC}"
-            read -p "按回车键继续..."
-            return
-        fi
-    fi
-    run_script "$WORK_DIR/serverchan_notifier.sh"
-    echo -e "${GREEN}Server酱通知功能安装完成！${NC}"
-    read -p "按回车键继续..."
-}
-
-
 # 查看日志
 view_logs() {
     echo -e "${CYAN}查看日志${NC}"
     echo "1) 流量监控日志"
     echo "2) Telegram通知日志"
     echo "3) PushPlus通知日志"
-    echo "4) Server酱通知日志"
     echo "0) 返回主菜单"
     
     read -p "请选择要查看的日志 [0-5]: " log_choice
@@ -148,13 +122,7 @@ view_logs() {
                 echo -e "${RED}PushPlus通知日志不存在${NC}"
             fi
             ;;
-        4)
-            if [ -f "$WORK_DIR/serverchan_notifier.log" ]; then
-                tail -20 "$WORK_DIR/serverchan_notifier.log"
-            else
-                echo -e "${RED}Server酱通知日志不存在${NC}"
-            fi
-            ;;
+
         0)
             return
             ;;
@@ -172,7 +140,6 @@ view_config() {
     echo "1) 流量监控配置"
     echo "2) Telegram通知配置"
     echo "3) PushPlus通知配置"
-    echo "4) Server酱通知配置"
     echo "0) 返回主菜单"
     
     read -p "请选择要查看的配置类型 [0-4]: " config_choice
@@ -197,13 +164,6 @@ view_config() {
                 cat "$WORK_DIR/pushplus_notifier_config.txt"
             else
                 echo -e "${RED}PushPlus通知配置不存在${NC}"
-            fi
-            ;;
-        4)
-            if [ -f "$WORK_DIR/serverchan_notifier_config.txt" ]; then
-                cat "$WORK_DIR/serverchan_notifier_config.txt"
-            else
-                echo -e "${RED}Server酱通知配置不存在${NC}"
             fi
             ;;
         0)
@@ -249,7 +209,7 @@ stop_all_services() {
 update_all_scripts() {
     echo -e "${CYAN}正在更新所有脚本到最新版本...${NC}"
     
-    local scripts=("trafficcop.sh" "tg_notifier.sh" "pushplus_notifier.sh" "serverchan_notifier.sh" 
+    local scripts=("trafficcop.sh" "tg_notifier.sh" "pushplus_notifier.sh" 
 )
     
     for script in "${scripts[@]}"; do
@@ -302,12 +262,11 @@ show_main_menu() {
     echo -e "${YELLOW}1) 安装/管理流量监控${NC}"
     echo -e "${YELLOW}2) 安装/管理Telegram通知${NC}"
     echo -e "${YELLOW}3) 安装/管理PushPlus通知${NC}"
-    echo -e "${YELLOW}4) 安装/管理Server酱通知${NC}"
-    echo -e "${YELLOW}5) 查看日志${NC}"
-    echo -e "${YELLOW}6) 查看当前配置${NC}"
+    echo -e "${YELLOW}4) 查看日志${NC}"
+    echo -e "${YELLOW}5) 查看当前配置${NC}"
+    echo -e "${YELLOW}6) 读取当前使用流量${NC}"   
     echo -e "${GREEN}7) 停止所有服务${NC}"
     echo -e "${GREEN}8) 更新所有脚本到最新版本${NC}"
-    echo -e "${YELLOW}9) 读取当前使用流量${NC}"   
     echo -e "${YELLOW}0) 退出${NC}"
     echo -e "${PURPLE}====================================${NC}"
     echo ""
@@ -333,14 +292,14 @@ main() {
                 install_pushplus_notifier
                 ;;
             4)
-                install_serverchan_notifier
-                ;;
-            5)
                 view_logs
                 ;;
-            6)
+            5)
                 view_config
                 ;;
+            6)
+                Traffic_all
+                ;;       
 
             7)
                 stop_all_services
@@ -348,9 +307,7 @@ main() {
             8)
                 update_all_scripts
                 ;;
-            9)
-                Traffic_all
-                ;;
+
             0)
                 echo -e "${GREEN}感谢使用TrafficCop管理工具！${NC}"
                 exit 0
