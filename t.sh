@@ -287,7 +287,7 @@ Traffic_all() {
 show_main_menu() {
     clear
     echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║         TrafficCop 管理工具 v${SCRIPT_VERSION}        ║${NC}"
+    echo -e "${BLUE}║         TrafficCop 管理工具             ║${NC}"
     echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
     echo -e "${PURPLE}====================================${NC}"
     echo ""
