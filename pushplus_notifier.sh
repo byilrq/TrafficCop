@@ -324,16 +324,49 @@ setup_cron() {
 # 主入口
 # ============================================
 main() {
+    echo "----------------------------------------------" | tee -a "$CRON_LOG"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') 文件已迁移到新的工作目录: $WORK_DIR" | tee -a "$CRON_LOG"
+    echo "----------------------------------------------" | tee -a "$CRON_LOG"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') : 进入主任务" | tee -a "$CRON_LOG"
+
+    echo "$(date '+%Y-%m-%d %H:%M:%S') : 参数数量: $# " | tee -a "$CRON_LOG"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') : 所有参数: $*" | tee -a "$CRON_LOG"
+
+    echo "$(date '+%Y-%m-%d %H:%M:%S') : 开始检查是否有其他实例运行" | tee -a "$CRON_LOG"
     check_running
+    echo "$(date '+%Y-%m-%d %H:%M:%S') : 没有其他实例运行，继续执行" | tee -a "$CRON_LOG"
+
     if [[ "$*" == *"-cron"* ]]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') : 检测到 -cron 参数, 进入 cron 模式" | tee -a "$CRON_LOG"
         if read_config; then
-            current_time=$(date +%H:%M)
+            echo "$(date '+%Y-%m-%d %H:%M:%S') : 成功读取配置文件" | tee -a "$CRON_LOG"
+
+            # === 日志文件每日清理逻辑（只在每日任务触发时清理） ===
+            current_time=$(TZ='Asia/Shanghai' date +%H:%M)
+            echo "$(date '+%Y-%m-%d %H:%M:%S') : 当前时间: $current_time, 设定的报告时间: $DAILY_REPORT_TIME" | tee -a "$CRON_LOG"
             if [ "$current_time" == "$DAILY_REPORT_TIME" ]; then
-                daily_report
+                echo "$(date '+%Y-%m-%d %H:%M:%S') : 时间匹配，清空旧日志以生成新日报日志。" > "$CRON_LOG"
+                echo "----------------------------------------------" >> "$CRON_LOG"
+                echo "$(date '+%Y-%m-%d %H:%M:%S') : 开始发送每日报告" >> "$CRON_LOG"
+
+                if daily_report; then
+                    echo "$(date '+%Y-%m-%d %H:%M:%S') : ✅ 每日报告发送成功" >> "$CRON_LOG"
+                else
+                    echo "$(date '+%Y-%m-%d %H:%M:%S') : ❌ 每日报告发送失败" >> "$CRON_LOG"
+                fi
+            else
+                echo "$(date '+%Y-%m-%d %H:%M:%S') : 当前时间与报告时间不匹配，不发送报告" | tee -a "$CRON_LOG"
             fi
+        else
+            echo "$(date '+%Y-%m-%d %H:%M:%S') : 配置文件不存在或不完整，跳过执行" | tee -a "$CRON_LOG"
+            exit 1
         fi
     else
-        if ! read_config; then initial_config; fi
+        echo "$(date '+%Y-%m-%d %H:%M:%S') : 未检测到 -cron 参数, 启动交互菜单模式" | tee -a "$CRON_LOG"
+        if ! read_config; then
+            echo "$(date '+%Y-%m-%d %H:%M:%S') : 配置文件缺失或不完整，执行初始化配置" | tee -a "$CRON_LOG"
+            initial_config
+        fi
         setup_cron
 
         while true; do
@@ -360,4 +393,4 @@ main() {
 }
 
 main "$@"
-echo "----------------------------------------------" | tee -a "$CRON_LOG"
+" | tee -a "$CRON_LOG"
