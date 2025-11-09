@@ -257,8 +257,8 @@ fi
     local title="🖥️ [${MACHINE_NAME}] 每日报告"
     content+="🕒日期：$(date '+%Y-%m-%d')<br>"
     content+="${diff_emoji}剩余：${diff_days}<br>"
-    content+="📅周期: ${period}<br>"
-    content+="⌛已用: ${usage} GB<br>"
+    content+="📅周期：${period}<br>"
+    content+="⌛已用：${usage} GB<br>"
     content+="🌐套餐：${limit}"
 
     pushplus_send "$title" "$content"
