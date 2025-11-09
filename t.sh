@@ -272,7 +272,6 @@ show_main_menu() {
     echo -e "${BLUE}║         TrafficCop 管理工具 v${SCRIPT_VERSION}        ║${NC}"
     echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
     echo -e "${PURPLE}====================================${NC}"
-    echo -e "${CYAN}最后更新: ${LAST_UPDATE}${NC}"
     echo ""
     echo -e "${YELLOW}1) 安装/管理流量监控${NC}"
     echo -e "${YELLOW}2) 安装/管理Telegram通知${NC}"
