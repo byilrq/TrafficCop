@@ -562,10 +562,7 @@ else
 
     setup_cron
 
- 
-
 # 显示菜单
-  # 显示菜单
 while true; do
     clear
     echo "======================================"
