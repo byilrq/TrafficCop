@@ -155,6 +155,7 @@ view_config() {
     echo "1) 流量监控配置"
     echo "2) Telegram通知配置"
     echo "3) PushPlus通知配置"
+    echo "4) cron任务配置"
     echo "0) 返回主菜单"
     
     read -p "请选择要查看的配置类型 [0-4]: " config_choice
@@ -181,6 +182,22 @@ view_config() {
                 echo -e "${RED}PushPlus通知配置不存在${NC}"
             fi
             ;;
+        4)
+            echo -e "${CYAN}当前 cron 任务列表${NC}"
+            echo "--------------------------------------"
+            # 检查当前用户 crontab
+            if crontab -l >/dev/null 2>&1; then
+                crontab -l | grep -E "TrafficCop|pushplus|tg_notifier|traffic_monitor" --color=always || echo "（未发现相关任务）"
+            else
+                echo -e "${RED}未找到当前用户的 crontab 任务${NC}"
+            fi
+            echo "--------------------------------------"
+            echo ""
+            echo "如需查看系统级任务，可执行："
+            echo "  cat /etc/crontab"
+            echo "  ls /etc/cron.d/"
+            echo "  cat /var/spool/cron/root"
+            ;;
         0)
             return
             ;;
@@ -191,6 +208,7 @@ view_config() {
     
     read -p "按回车键继续..."
 }
+
 
 # 停止所有服务
 stop_all_services() {
