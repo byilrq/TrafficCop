@@ -103,26 +103,31 @@ view_logs() {
     case $log_choice in
         1)
             if [ -f "$WORK_DIR/traffic_monitor.log" ]; then
+                echo -e "${YELLOW}====== 最近 50 条 流量监控日志 ======${NC}"
                 tail -50 "$WORK_DIR/traffic_monitor.log"
             else
                 echo -e "${RED}流量监控日志不存在${NC}"
+                echo -e "（预期位置: $WORK_DIR/traffic_monitor.log）"
             fi
             ;;
         2)
-            if [ -f "$WORK_DIR/tg_notifier.log" ]; then
-                tail -20 "$WORK_DIR/tg_notifier.log"
+            if [ -f "$WORK_DIR/tg_notifier_cron.log" ]; then
+                echo -e "${YELLOW}====== 最近 20 条 Telegram 通知日志 ======${NC}"
+                tail -20 "$WORK_DIR/tg_notifier_cron.log"
             else
                 echo -e "${RED}Telegram通知日志不存在${NC}"
+                echo -e "（预期位置: $WORK_DIR/tg_notifier_cron.log）"
             fi
             ;;
         3)
-            if [ -f "$WORK_DIR/pushplus_notifier.log" ]; then
-                tail -20 "$WORK_DIR/pushplus_notifier.log"
+            if [ -f "$WORK_DIR/pushplus_notifier_cron.log" ]; then
+                echo -e "${YELLOW}====== 最近 20 条 PushPlus 通知日志 ======${NC}"
+                tail -20 "$WORK_DIR/pushplus_notifier_cron.log"
             else
                 echo -e "${RED}PushPlus通知日志不存在${NC}"
+                echo -e "（预期位置: $WORK_DIR/pushplus_notifier_cron.log）"
             fi
             ;;
-
         0)
             return
             ;;
@@ -133,6 +138,7 @@ view_logs() {
     
     read -p "按回车键继续..."
 }
+
 
 # 查看当前配置
 view_config() {
