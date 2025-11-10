@@ -108,32 +108,27 @@ get_latest_message() {
     # 抓取整个网页HTML
     local html=$(curl -s "$url")
 
-    # 提取最后一条消息块（支持多行）
+    # 抓取所有消息块（每个 <div class="tgme_widget_message_text js-message_text"> 到对应 </div>）
     local message=$(echo "$html" | awk '
-        /tgme_widget_message_text js-message_text/ {flag=1; next}
-        /<\/div>/ {if(flag){flag=0; print "===MSG_END==="; next}}
-        flag {print}
-    ' | awk 'BEGIN{RS="===MSG_END==="} {gsub(/\r/,""); if(NF>0) last=$0} END{print last}')
+        /tgme_widget_message_text js-message_text/ {block="";flag=1;next}
+        flag && /<\/div>/ {flag=0; print block; next}
+        flag {block=block"\n"$0}
+    ' | tail -n 1)
 
     # 替换HTML换行标签为真实换行
     message=$(echo "$message" | sed 's/<br>/\n/gI')
 
-    # 删除所有HTML标签
+    # 删除HTML标签
     message=$(echo "$message" | sed 's/<[^>]*>//g')
 
     # 解码常见HTML实体
     message=$(echo "$message" | sed 's/&nbsp;/ /g; s/&amp;/\&/g; s/&lt;/</g; s/&gt;/>/g')
 
-    # 去掉多余空行
-    message=$(echo "$message" | awk 'NF' )
-
-    # 修剪前后空格
-    message=$(echo "$message" | sed 's/^[ \t]*//;s/[ \t]*$//')
+    # 清理多余空白行与前后空格
+    message=$(echo "$message" | sed 's/^[ \t]*//;s/[ \t]*$//' | awk 'NF')
 
     echo "$message"
 }
-
-
 
 # ============================================
 # 检查频道更新并推送
