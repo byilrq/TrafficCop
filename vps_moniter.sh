@@ -197,8 +197,9 @@ check_channels() {
                 done
                 [[ $matched -eq 0 ]] && continue
             fi
-            local msg="📢 频道：${ch}\n🕒 时间：$(date '+%Y-%m-%d %H:%M:%S')\n💬 内容：${latest}"
-            pushplus_send "VPS监控通知" "$msg"
+            #local msg="📢 频道：${ch}\n🕒 时间：$(date '+%Y-%m-%d %H:%M:%S')\n💬 内容：${latest}" 
+            local msg="🕒 时间：$(date '+%Y-%m-%d %H:%M:%S')\n💬 内容：${latest}"
+            pushplus_send "监控通知" "$msg"
             echo "$latest" > "$STATE_FILE"
             echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ [$ch] 推送成功: $latest" >> "$LOG_FILE"
         fi
