@@ -103,40 +103,45 @@ get_latest_message() {
     else
         local url="https://t.me/s/${channel}"
     fi
-    # 抓取整个网页HTML，添加 User-Agent 模拟浏览器
-    local html=$(curl -s -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" "$url")
-    
-    # 改进 awk：提取所有 tgme_widget_message_text 块，并取最后一个完整块
+    # 抓取HTML，模拟浏览器 + 压缩 + 重试
+    local html=$(curl -s --compressed -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36" "$url" || echo "")
+    [[ -z "$html" ]] && echo "" && return
+
+    # 提取最后一个消息文本块（匹配当前Telegram class，无 js-message_text）
     local message=$(echo "$html" | awk '
-        BEGIN { RS="</div>" }  # 以 </div> 为记录分隔符
-        /tgme_widget_message_text js-message_text/ {
-            gsub(/.*tgme_widget_message_text js-message_text[^>]*>/, "");  # 移除开头标签
-            gsub(/<[^>]+>/, "");  # 移除剩余标签
-            gsub(/^[ \t\n]+|[ \t\n]+$/, "");  # 清理空白
-            if (length($0) > 0) messages[NR] = $0;  # 存储非空消息
+        BEGIN { RS="</div>" }  # 以 </div> 分隔记录
+        /tgme_widget_message_text/ && !/tgme_widget_message_views/ && !/tgme_widget_message_date/ {
+            gsub(/.*tgme_widget_message_text[^>]*>/, "");  # 移除开头标签
+            gsub(/<[^>]+>/, "");  # 移除所有HTML标签
+            gsub(/^[ \t\n\r]+|[ \t\n\r]+$/, "");  # 清理空白
+            if (length($0) > 0) messages[NR] = $0;
         }
         END {
             if (length(messages) > 0) {
-                print messages[NR];  # 打印最后一个消息
+                for (i in messages) last = messages[i];  # 取最后一个
+                print last;
             }
         }
-    ' | tail -n 1)  # 额外保险，取最后一个
-    
-    # 替换HTML换行标签为真实换行
+    ')
+
+    # 如果 awk 没提取到，备用方案（极少情况）
+    if [[ -z "$message" ]]; then
+        message=$(echo "$html" | grep -Poz '(?s)<div class="tgme_widget_message_text[^>]*>(.*?)</div>' | tail -n1 | sed 's/<[^>]*>//g; s/^[\n ]*//; s/[\n ]*$//')
+    fi
+
+    # 替换<br>为换行，解码实体
     message=$(echo "$message" | sed 's/<br>/\n/gI')
-    # 删除剩余HTML标签
-    message=$(echo "$message" | sed 's/<[^>]*>//g')
-    # 解码常见HTML实体
-    message=$(echo "$message" | sed 's/&nbsp;/ /g; s/&amp;/\&/g; s/&lt;/</g; s/&gt;/>/g')
-    # 清理多余空白行与前后空格，并合并多行为单字符串（如果需要多行，可移除 awk NF）
-    message=$(echo "$message" | sed 's/^[ \t]*//;s/[ \t]*$//' | awk 'NF' | tr '\n' ' ' | sed 's/  */ /g')
-    
-    # 如果消息太短或看起来像视图，可能是提取失败，输出空
-    local pattern='[0-9]+ ?views'  # 使用变量存储正则，? 表示可选空格的前一个字符（这里是空格）
-    if [[ ${#message} -lt 10 || "$message" =~ $pattern ]]; then
+    message=$(echo "$message" | sed 's/&nbsp;/ /g; s/&amp;/\&/g; s/&lt;/</g; s/&gt;/>/g; s/&quot;/"/g')
+
+    # 清理多余空白，但保留多行结构
+    message=$(echo "$message" | awk 'NF > 0 {print $0}')
+
+    # 过滤掉明显是视图/日期/空的消息（views 可能是纯数字、"xxviews" 或 "xx views"）
+    local pattern='^( *[0-9]+ ?(views?|次)? *$)|^[0-9]{1,2}:[0-9]{2}$|^[0-9]{4}/[0-9]{2}/[0-9]{2}'
+    if [[ -z "$message" || ${#message} -lt 15 || "$message" =~ $pattern ]]; then
         message=""
     fi
-    
+
     echo "$message"
 }
 
