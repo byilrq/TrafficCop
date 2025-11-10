@@ -97,36 +97,45 @@ pushplus_send() {
 # ============================================
 get_latest_message() {
     local channel="$1"
-
     # 自动识别是否为完整URL
     if [[ "$channel" =~ ^https?://t\.me/s/ ]]; then
         local url="$channel"
     else
         local url="https://t.me/s/${channel}"
     fi
-
-    # 抓取整个网页HTML
-    local html=$(curl -s "$url")
-
-    # 抓取所有消息块（每个 <div class="tgme_widget_message_text js-message_text"> 到对应 </div>）
+    # 抓取整个网页HTML，添加 User-Agent 模拟浏览器
+    local html=$(curl -s -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" "$url")
+    
+    # 改进 awk：提取所有 tgme_widget_message_text 块，并取最后一个完整块
     local message=$(echo "$html" | awk '
-        /tgme_widget_message_text js-message_text/ {block="";flag=1;next}
-        flag && /<\/div>/ {flag=0; print block; next}
-        flag {block=block"\n"$0}
-    ' | tail -n 1)
-
+        BEGIN { RS="</div>" }  # 以 </div> 为记录分隔符
+        /tgme_widget_message_text js-message_text/ {
+            gsub(/.*tgme_widget_message_text js-message_text[^>]*>/, "");  # 移除开头标签
+            gsub(/<[^>]+>/, "");  # 移除剩余标签
+            gsub(/^[ \t\n]+|[ \t\n]+$/, "");  # 清理空白
+            if (length($0) > 0) messages[NR] = $0;  # 存储非空消息
+        }
+        END {
+            if (length(messages) > 0) {
+                print messages[NR];  # 打印最后一个消息
+            }
+        }
+    ' | tail -n 1)  # 额外保险，取最后一个
+    
     # 替换HTML换行标签为真实换行
     message=$(echo "$message" | sed 's/<br>/\n/gI')
-
-    # 删除HTML标签
+    # 删除剩余HTML标签
     message=$(echo "$message" | sed 's/<[^>]*>//g')
-
     # 解码常见HTML实体
     message=$(echo "$message" | sed 's/&nbsp;/ /g; s/&amp;/\&/g; s/&lt;/</g; s/&gt;/>/g')
-
-    # 清理多余空白行与前后空格
-    message=$(echo "$message" | sed 's/^[ \t]*//;s/[ \t]*$//' | awk 'NF')
-
+    # 清理多余空白行与前后空格，并合并多行为单字符串（如果需要多行，可移除 awk NF）
+    message=$(echo "$message" | sed 's/^[ \t]*//;s/[ \t]*$//' | awk 'NF' | tr '\n' ' ' | sed 's/  */ /g')
+    
+    # 如果消息太短或看起来像视图，可能是提取失败，输出空
+    if [[ ${#message} -lt 10 || "$message" =~ [0-9]+[ ]?views ]]; then
+        message=""
+    fi
+    
     echo "$message"
 }
 
