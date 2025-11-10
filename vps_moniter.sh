@@ -132,9 +132,12 @@ get_latest_message() {
     message=$(echo "$message" | sed 's/^[ \t]*//;s/[ \t]*$//' | awk 'NF' | tr '\n' ' ' | sed 's/  */ /g')
     
     # 如果消息太短或看起来像视图，可能是提取失败，输出空
-    if [[ ${#message} -lt 10 || "$message" =~ [0-9]+[ ]?views ]]; then
+    local pattern='[0-9]+ ?views'  # 使用变量存储正则，? 表示可选空格的前一个字符（这里是空格）
+    if [[ ${#message} -lt 10 || "$message" =~ $pattern ]]; then
         message=""
     fi
+    
+    echo "$message"
     
     echo "$message"
 }
