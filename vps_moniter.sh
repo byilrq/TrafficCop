@@ -119,6 +119,9 @@ get_latest_message() {
     message=$(echo "$message" | sed 's/^[ \t]*//;s/[ \t]*$//')
 
     echo "$message"
+
+    echo "$html" | grep "tgme_widget_message_text" | tail -n 2
+
 }
 
 # ============================================
