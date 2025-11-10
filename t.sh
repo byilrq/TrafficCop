@@ -284,6 +284,42 @@ Traffic_all() {
     fi
 }
 
+# 监控vpschannel
+install_vps_moniter() {
+    echo -e "${CYAN}正在安装 VPS 监控功能...${NC}"
+
+    if curl -s --head "$REPO_URL/vps_moniter.sh" | grep "200" >/dev/null; then
+        install_script "vps_moniter.sh"
+        echo -e "${GREEN}已从仓库中下载最新 vps_moniter.sh！${NC}"
+    else
+        echo -e "${YELLOW}从仓库下载失败，使用本地文件...${NC}"
+        if [ -f "vps_moniter.sh" ]; then
+            cp "vps_moniter.sh" "$WORK_DIR/vps_moniter.sh"
+            chmod +x "$WORK_DIR/vps_moniter.sh"
+        else
+            echo -e "${RED}本地 vps_moniter.sh 文件不存在！${NC}"
+            read -p "按回车键继续..."
+            return
+        fi
+    fi
+
+    run_script "$WORK_DIR/vps_moniter.sh"
+    ret=$?
+    case $ret in
+        99)
+            echo "VPS监控已停止。"
+            ;;
+        0)
+            echo "VPS监控功能安装完成！"
+            ;;
+        *)
+            echo "VPS监控脚本执行异常（返回码：$ret）"
+            ;;
+    esac
+    read -p "按回车键继续..."
+}
+
+
 # 显示主菜单
 show_main_menu() {
     clear
@@ -295,11 +331,12 @@ show_main_menu() {
     echo -e "${YELLOW}1) 安装/管理流量监控${NC}"
     echo -e "${YELLOW}2) 安装/管理Telegram通知${NC}"
     echo -e "${YELLOW}3) 安装/管理PushPlus通知${NC}"
-    echo -e "${YELLOW}4) 查看日志${NC}"
-    echo -e "${YELLOW}5) 查看配置${NC}"
-    echo -e "${YELLOW}6) 查看流量${NC}"   
-    echo -e "${RED}7) 停止所有服务${NC}"
-    echo -e "${BLUE}8) 更新所有脚本${NC}"
+    echo -e "${YELLOW}4) 安装/管理tg群监控通知${NC}"  
+    echo -e "${YELLOW}5) 查看日志${NC}"
+    echo -e "${YELLOW}6) 查看配置${NC}"
+    echo -e "${YELLOW}7) 查看流量${NC}"   
+    echo -e "${RED}8) 停止所有服务${NC}"
+    echo -e "${BLUE}9) 更新所有脚本${NC}"
     echo -e "${YELLOW}0) 退出${NC}"
     echo -e "${PURPLE}====================================${NC}"
     echo ""
@@ -312,7 +349,7 @@ main() {
     
     while true; do
         show_main_menu
-        read -p "请选择操作 [0-12]: " choice
+        read -p "请选择操作 [0-10]: " choice
         
         case $choice in
             1)
@@ -325,23 +362,26 @@ main() {
                 install_pushplus_notifier
                 ;;
             4)
+                install_vps_moniter
+                ;;       
+            5)
                 view_logs
                 ;;
-            5)
+            6)
                 view_config
                 ;;
-            6)
+            7)
                 Traffic_all
                 ;;       
 
-            7)
+            8)
                 stop_all_services
                 ;;
-            8)
+            9)
                 update_all_scripts
                 ;;
 
-            0)
+            10)
                 echo -e "${GREEN}感谢使用TrafficCop管理工具！${NC}"
                 exit 0
                 ;;
