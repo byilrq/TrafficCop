@@ -138,8 +138,6 @@ get_latest_message() {
     fi
     
     echo "$message"
-    
-    echo "$message"
 }
 
 # ============================================
