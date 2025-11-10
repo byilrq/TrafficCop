@@ -95,11 +95,29 @@ pushplus_send() {
 # ============================================
 # 获取频道最新一条消息
 # ============================================
+
 get_latest_message() {
     local channel="$1"
-    local message=$(curl -s "https://t.me/s/${channel}" | \
-        grep -oP '(?<=<div class="tgme_widget_message_text js-message_text"[^>]*>).*?(?=</div>)' | \
-        tail -n 1 | sed 's/<[^>]*>//g' | tr -d '\r' | tr -d '\n')
+
+    # 自动识别是否为完整URL
+    if [[ "$channel" =~ ^https?://t\.me/s/ ]]; then
+        local url="$channel"
+    else
+        local url="https://t.me/s/${channel}"
+    fi
+
+    # 抓取HTML
+    local html=$(curl -s "$url")
+
+    # 兼容不同HTML结构，抓取文本
+    local message=$(echo "$html" | grep -oP '(?<=<div class="tgme_widget_message_text js-message_text"[^>]*>)(.|\n)*?(?=</div>)' | tail -n 1)
+
+    # 删除所有HTML标签并转义特殊字符
+    message=$(echo "$message" | sed 's/<[^>]*>//g' | sed 's/&nbsp;/ /g' | sed 's/&amp;/&/g' | sed 's/&lt;/</g' | sed 's/&gt;/>/g' | tr -d '\r')
+
+    # 去掉开头和结尾空白
+    message=$(echo "$message" | sed 's/^[ \t]*//;s/[ \t]*$//')
+
     echo "$message"
 }
 
