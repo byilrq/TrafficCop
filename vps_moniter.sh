@@ -255,6 +255,35 @@ setup_cron() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ Crontab 已更新。" | tee -a "$CRON_LOG"
 }
 # ============================================
+# 测试消息
+# ============================================
+# ============================================
+# 测试 PushPlus 推送功能
+# ============================================
+test_pushplus_notification() {
+    read_config || return
+    echo -e "${CYAN}正在发送测试推送...${PLAIN}"
+
+    local now_time=$(date '+%Y-%m-%d %H:%M:%S')
+    local test_title="🔔 [监控测试消息]"
+    local test_content="🕒 时间：${now_time}<br>📢 频道：${TG_CHANNELS:-未设置}<br><br>这是来自 VPS 监控脚本的测试消息。<br>如果您看到此推送，说明 PushPlus 配置正常 ✅"
+
+    local response=$(curl -s -X POST "http://www.pushplus.plus/send" \
+        -H "Content-Type: application/json" \
+        -d "{\"token\":\"${PUSHPLUS_TOKEN}\",\"title\":\"${test_title}\",\"content\":\"${test_content}\",\"template\":\"markdown\"}")
+
+    if echo "$response" | grep -q '"code":200'; then
+        echo -e "${GREEN}✅ PushPlus 测试推送成功！${PLAIN}"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ 测试推送成功" >> "$LOG_FILE"
+    else
+        echo -e "${RED}❌ 推送失败！${PLAIN}"
+        echo "返回信息：$response"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') ❌ 测试推送失败：$response" >> "$LOG_FILE"
+    fi
+}
+
+
+# ============================================
 # 主菜单
 # ============================================
 main_menu() {
@@ -267,6 +296,7 @@ main_menu() {
         echo -e "${GREEN}2.${PLAIN} 设置推送周期 (当前: ${CHECK_INTERVAL:-未设}) 秒"
         echo -e "${GREEN}3.${PLAIN} 打印频道最新消息"
         echo -e "${GREEN}4.${PLAIN} 手动推送最新消息"
+        
         echo -e "${RED}5.${PLAIN} 停止并删除任务"
         echo -e "${WHITE}0.${PLAIN} 退出"
         echo -e "${BLUE}======================================${PLAIN}"
@@ -282,6 +312,7 @@ main_menu() {
                 ;;
             3) print_latest; echo -e "${GREEN}操作完成。${PLAIN}" ;;
             4) manual_push; echo -e "${GREEN}操作完成。${PLAIN}" ;;
+            
             5)
                 crontab -l | grep -v "vps_moniter.sh" | crontab -
                 echo -e "${RED}已停止定时任务并清理配置。${PLAIN}"
