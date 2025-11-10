@@ -95,7 +95,6 @@ pushplus_send() {
 # ============================================
 # 获取频道最新一条消息
 # ============================================
-
 get_latest_message() {
     local channel="$1"
 
@@ -109,20 +108,25 @@ get_latest_message() {
     # 抓取HTML
     local html=$(curl -s "$url")
 
-    # 兼容不同HTML结构，抓取文本
-    local message=$(echo "$html" | grep -oP '(?<=<div class="tgme_widget_message_text js-message_text"[^>]*>)(.|\n)*?(?=</div>)' | tail -n 1)
+    # 用 awk + sed 提取消息正文（不依赖 grep -P）
+    # 1. 找到带 js-message_text 的 div 块
+    # 2. 取最后一条消息（最新）
+    local message=$(echo "$html" | awk '/tgme_widget_message_text js-message_text/{flag=1;next}/<\/div>/{if(flag){flag=0;print ""};next}flag' | tail -n 30)
 
-    # 删除所有HTML标签并转义特殊字符
-    message=$(echo "$message" | sed 's/<[^>]*>//g' | sed 's/&nbsp;/ /g' | sed 's/&amp;/&/g' | sed 's/&lt;/</g' | sed 's/&gt;/>/g' | tr -d '\r')
+    # 如果上面没匹配到，尝试备用匹配模式
+    if [[ -z "$message" ]]; then
+        message=$(echo "$html" | awk '/js-message_text/{flag=1;next}/<\/div>/{if(flag){flag=0;print ""};next}flag' | tail -n 30)
+    fi
 
-    # 去掉开头和结尾空白
-    message=$(echo "$message" | sed 's/^[ \t]*//;s/[ \t]*$//')
+    # 去掉HTML标签
+    message=$(echo "$message" | sed 's/<[^>]*>//g')
+    message=$(echo "$message" | sed 's/&nbsp;/ /g; s/&amp;/\&/g; s/&lt;/</g; s/&gt;/>/g')
+    message=$(echo "$message" | tr -d '\r' | sed '/^\s*$/d')
+    message=$(echo "$message" | tail -n 10 | tr '\n' ' ')
 
     echo "$message"
-
-    echo "$html" | grep "tgme_widget_message_text" | tail -n 2
-
 }
+
 
 # ============================================
 # 检查频道更新并推送
