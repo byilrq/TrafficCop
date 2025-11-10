@@ -180,11 +180,14 @@ get_latest_message() {
 # ============================================
 check_channels() {
     read_config || return
+
     for ch in $TG_CHANNELS; do
         local STATE_FILE="$WORK_DIR/last_${ch}.txt"
         local latest=$(get_latest_message "$ch")
         [[ -z "$latest" ]] && continue
+
         local last=$(cat "$STATE_FILE" 2>/dev/null)
+
         if [[ "$latest" != "$last" ]]; then
             # 关键词筛选
             if [[ -n "$KEYWORDS" ]]; then
@@ -197,14 +200,25 @@ check_channels() {
                 done
                 [[ $matched -eq 0 ]] && continue
             fi
-            #local msg="📢 频道：${ch}\n🕒 时间：$(date '+%Y-%m-%d %H:%M:%S')\n💬 内容：${latest}" 
-            local msg="🕒 时间：$(date '+%Y-%m-%d %H:%M:%S')\n💬 内容：${latest}"
-            pushplus_send "监控通知" "$msg"
+
+            # 格式化消息（PushPlus 支持 markdown）
+            local now_time=$(date '+%Y-%m-%d %H:%M:%S')
+            local msg="🕒 **时间：** ${now_time}<br>💬 **频道：** ${ch}<br><br>内容：<br>${latest//\n/<br>}"
+
+            # 推送
+            curl -s -X POST "http://www.pushplus.plus/send" \
+                -H "Content-Type: application/json" \
+                -d "{\"token\":\"${PUSHPLUS_TOKEN}\",\"title\":\"VPS监控通知\",\"content\":\"${msg}\",\"template\":\"markdown\"}" \
+                >> "$LOG_FILE"
+
+            # 保存状态
             echo "$latest" > "$STATE_FILE"
             echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ [$ch] 推送成功: $latest" >> "$LOG_FILE"
         fi
     done
 }
+
+
 # ============================================
 # 手动打印 / 推送
 # ============================================
