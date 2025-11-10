@@ -71,6 +71,7 @@ install_pushplus_notifier() {
     # 检查pushplus_notifier.sh是否在仓库中，如果不在，使用本地的
     if curl -s --head "$REPO_URL/pushplus_notifier.sh" | grep "HTTP/2 200\|HTTP/1.1 200" > /dev/null; then
         install_script "pushplus_notifier.sh"
+        echo -e "${RED} 已从仓库中下载最新pushplus_notifier.sh文件！${NC}"
     else
         echo -e "${YELLOW}从仓库下载失败，使用本地文件...${NC}"
         # 复制当前目录下的pushplus_notifier.sh到工作目录
