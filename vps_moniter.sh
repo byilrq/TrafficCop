@@ -255,9 +255,6 @@ setup_cron() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ Crontab 已更新。" | tee -a "$CRON_LOG"
 }
 # ============================================
-# 测试消息
-# ============================================
-# ============================================
 # 测试 PushPlus 推送功能
 # ============================================
 test_pushplus_notification() {
@@ -295,12 +292,12 @@ main_menu() {
         echo -e "${GREEN}1.${PLAIN} 安装 / 修改配置"
         echo -e "${GREEN}2.${PLAIN} 设置推送周期 (当前: ${CHECK_INTERVAL:-未设}) 秒"
         echo -e "${GREEN}3.${PLAIN} 打印频道最新消息"
-        echo -e "${GREEN}4.${PLAIN} 手动推送最新消息"
-        
-        echo -e "${RED}5.${PLAIN} 停止并删除任务"
+        echo -e "${GREEN}4.${PLAIN} 推送最新消息"
+        echo -e "${GREEN}5.${PLAIN} 推送测试消息"
+        echo -e "${RED}6.${PLAIN} 停止并删除任务"
         echo -e "${WHITE}0.${PLAIN} 退出"
         echo -e "${BLUE}======================================${PLAIN}"
-        read -rp "请选择操作 [0-5]: " choice
+        read -rp "请选择操作 [0-6]: " choice
         echo
         case $choice in
             1) initial_config; setup_cron; echo -e "${GREEN}操作完成。${PLAIN}" ;;
@@ -312,12 +309,13 @@ main_menu() {
                 ;;
             3) print_latest; echo -e "${GREEN}操作完成。${PLAIN}" ;;
             4) manual_push; echo -e "${GREEN}操作完成。${PLAIN}" ;;
-            
-            5)
+            5) test_pushplus_notification; echo -e "${GREEN}操作完成。${PLAIN}" ;;
+            6)
                 crontab -l | grep -v "vps_moniter.sh" | crontab -
                 echo -e "${RED}已停止定时任务并清理配置。${PLAIN}"
                 echo -e "${GREEN}操作完成。${PLAIN}"
                 ;;
+                
             0) exit 0 ;;
             *) echo "无效选项"; echo -e "${GREEN}操作完成。${PLAIN}" ;;
         esac
