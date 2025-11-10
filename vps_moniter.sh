@@ -176,35 +176,91 @@ get_latest_message() {
     echo "$message"
 }
 # ============================================
-# 检查频道更新并推送
+# 检查频道更新并推送（支持多条更新）
 # ============================================
 check_channels() {
     read_config || return
+
     for ch in $TG_CHANNELS; do
         local STATE_FILE="$WORK_DIR/last_${ch}.txt"
-        local latest=$(get_latest_message "$ch")
-        [[ -z "$latest" ]] && continue
-        local last=$(cat "$STATE_FILE" 2>/dev/null)
-        if [[ "$latest" != "$last" ]]; then
-            # 关键词筛选
+        local html=$(curl -s --compressed -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" "https://t.me/s/${ch}")
+        [[ -z "$html" ]] && continue
+
+        # 提取最近10条消息块
+        local messages=()
+        while IFS= read -r line; do
+            messages+=("$line")
+        done < <(echo "$html" | awk '
+            BEGIN { RS="</div>" }
+            /tgme_widget_message_text/ && !/tgme_widget_message_views/ && !/tgme_widget_message_date/ {
+                gsub(/.*tgme_widget_message_text[^>]*>/, "")
+                gsub(/<br>/, "\n")
+                gsub(/<[^>]+>/, "")
+                gsub(/&nbsp;/, " ")
+                gsub(/&amp;/, "&")
+                gsub(/&lt;/, "<")
+                gsub(/&gt;/, ">")
+                gsub(/&quot;/, "\"")
+                gsub(/&#036;/, "$")
+                gsub(/&#64;/, "@")
+                gsub(/^[ \t\n\r]+|[ \t\n\r]+$/, "")
+                if (length($0) > 0) print $0
+            }
+        ' | tail -n 10)
+
+        # 如果没有消息
+        [[ ${#messages[@]} -eq 0 ]] && continue
+
+        # 读取上次缓存
+        local last_content=$(cat "$STATE_FILE" 2>/dev/null || echo "")
+
+        # 收集新增的消息
+        local new_msgs=()
+        for msg in "${messages[@]}"; do
+            if ! grep -qF "$msg" <<< "$last_content"; then
+                new_msgs+=("$msg")
+            fi
+        done
+
+        # 如果没有新消息，跳过
+        [[ ${#new_msgs[@]} -eq 0 ]] && continue
+
+        # 关键词过滤 + 拼接
+        local push_list=""
+        for msg in "${new_msgs[@]}"; do
+            local match=0
             if [[ -n "$KEYWORDS" ]]; then
-                matched=0
                 for kw in $KEYWORDS; do
-                    if [[ "$latest" == *"$kw"* ]]; then
-                        matched=1
+                    if [[ "$msg" == *"$kw"* ]]; then
+                        match=1
                         break
                     fi
                 done
-                [[ $matched -eq 0 ]] && continue
+            else
+                match=1  # 无关键词则不过滤
             fi
-            #local msg="📢 频道：${ch}\n🕒 时间：$(date '+%Y-%m-%d %H:%M:%S')\n💬 内容：${latest}" 
-            local msg="🕒 时间：$(date '+%Y-%m-%d %H:%M:%S')\n💬 内容：${latest}"
-            pushplus_send "监控通知" "$msg"
-            echo "$latest" > "$STATE_FILE"
-            echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ [$ch] 推送成功: $latest" >> "$LOG_FILE"
+            [[ $match -eq 1 ]] && push_list+="${msg}\n\n--------------------------------------\n"
+        done
+
+        # 若有匹配结果则推送
+        if [[ -n "$push_list" ]]; then
+            local title="📡 频道更新：${ch}"
+            local content="🕒 时间：$(date '+%Y-%m-%d %H:%M:%S')<br>频道：${ch}<br><br>以下为新消息：<br><br>${push_list//\n/<br>}"
+            local resp=$(curl -s -X POST "http://www.pushplus.plus/send" \
+                -H "Content-Type: application/json" \
+                -d "{\"token\":\"${PUSHPLUS_TOKEN}\",\"title\":\"${title}\",\"content\":\"${content}\",\"template\":\"markdown\"}")
+            if echo "$resp" | grep -q '"code":200'; then
+                echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ [$ch] 推送成功（${#new_msgs[@]} 条）" >> "$LOG_FILE"
+            else
+                echo "$(date '+%Y-%m-%d %H:%M:%S') ❌ [$ch] 推送失败: $resp" >> "$LOG_FILE"
+            fi
         fi
+
+        # 更新缓存（保存当前10条）
+        printf "%s\n" "${messages[@]}" > "$STATE_FILE"
     done
 }
+
 
 
 # ============================================
@@ -290,7 +346,7 @@ main_menu() {
         echo -e "${PURPLE} VPS 监控管理菜单${PLAIN}"
         echo -e "${BLUE}======================================${PLAIN}"
         echo -e "${GREEN}1.${PLAIN} 安装 / 修改配置"
-        echo -e "${GREEN}2.${PLAIN} 设置推送周期 (当前: ${CHECK_INTERVAL:-未设}) 秒"
+        echo -e "${GREEN}2.${PLAIN} 设置查询周期 (当前: ${CHECK_INTERVAL:-未设}) 秒"
         echo -e "${GREEN}3.${PLAIN} 打印频道最新消息"
         echo -e "${GREEN}4.${PLAIN} 推送最新消息"
         echo -e "${GREEN}5.${PLAIN} 推送测试消息"
