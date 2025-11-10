@@ -105,27 +105,34 @@ get_latest_message() {
         local url="https://t.me/s/${channel}"
     fi
 
-    # 抓取HTML
+    # 抓取整个网页HTML
     local html=$(curl -s "$url")
 
-    # 用 awk + sed 提取消息正文（不依赖 grep -P）
-    # 1. 找到带 js-message_text 的 div 块
-    # 2. 取最后一条消息（最新）
-    local message=$(echo "$html" | awk '/tgme_widget_message_text js-message_text/{flag=1;next}/<\/div>/{if(flag){flag=0;print ""};next}flag' | tail -n 30)
+    # 提取最后一条消息块（支持多行）
+    local message=$(echo "$html" | awk '
+        /tgme_widget_message_text js-message_text/ {flag=1; next}
+        /<\/div>/ {if(flag){flag=0; print "===MSG_END==="; next}}
+        flag {print}
+    ' | awk 'BEGIN{RS="===MSG_END==="} {gsub(/\r/,""); if(NF>0) last=$0} END{print last}')
 
-    # 如果上面没匹配到，尝试备用匹配模式
-    if [[ -z "$message" ]]; then
-        message=$(echo "$html" | awk '/js-message_text/{flag=1;next}/<\/div>/{if(flag){flag=0;print ""};next}flag' | tail -n 30)
-    fi
+    # 替换HTML换行标签为真实换行
+    message=$(echo "$message" | sed 's/<br>/\n/gI')
 
-    # 去掉HTML标签
+    # 删除所有HTML标签
     message=$(echo "$message" | sed 's/<[^>]*>//g')
+
+    # 解码常见HTML实体
     message=$(echo "$message" | sed 's/&nbsp;/ /g; s/&amp;/\&/g; s/&lt;/</g; s/&gt;/>/g')
-    message=$(echo "$message" | tr -d '\r' | sed '/^\s*$/d')
-    message=$(echo "$message" | tail -n 10 | tr '\n' ' ')
+
+    # 去掉多余空行
+    message=$(echo "$message" | awk 'NF' )
+
+    # 修剪前后空格
+    message=$(echo "$message" | sed 's/^[ \t]*//;s/[ \t]*$//')
 
     echo "$message"
 }
+
 
 
 # ============================================
