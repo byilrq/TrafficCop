@@ -381,7 +381,7 @@ main() {
                 update_all_scripts
                 ;;
 
-            10)
+            0)
                 echo -e "${GREEN}感谢使用TrafficCop管理工具！${NC}"
                 exit 0
                 ;;
