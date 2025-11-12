@@ -1,0 +1,398 @@
+#!/bin/bash
+# ============================================
+# Telegram Channel → nodeseek监控脚本 v1.0
+# 作者：by / 更新时间：2025-11-10
+# ============================================
+WORK_DIR="/root/TrafficCop"
+mkdir -p "$WORK_DIR"
+CONFIG_FILE="$WORK_DIR/nodeseek_config.txt"
+LOG_FILE="$WORK_DIR/nodeseek.log"
+CRON_LOG="$WORK_DIR/nodeseek_cron.log"
+SCRIPT_PATH="$WORK_DIR/nodeseek.sh"
+# ================== 彩色定义 ==================
+RED="\033[31m"; GREEN="\033[32m"; YELLOW="\033[33m"
+BLUE="\033[34m"; PURPLE="\033[35m"; CYAN="\033[36m"; WHITE="\033[37m"; PLAIN="\033[0m"
+export TZ='Asia/Shanghai'
+
+# ============================================
+# 配置管理（支持自动加载和持久化保存）
+# ============================================
+
+read_config() {
+    if [ ! -s "$CONFIG_FILE" ]; then
+        echo -e "${RED}❌ 配置文件不存在或为空，请先执行配置向导。${PLAIN}"
+        return 1
+    fi
+
+    # 加载配置
+    source "$CONFIG_FILE"
+
+    # 基础校验
+    if [ -z "$PUSHPLUS_TOKEN" ] || [ -z "$TG_CHANNELS" ]; then
+        echo -e "${RED}❌ 配置不完整，请重新配置。${PLAIN}"
+        return 1
+    fi
+    return 0
+}
+
+write_config() {
+    cat > "$CONFIG_FILE" <<EOF
+PUSHPLUS_TOKEN="$PUSHPLUS_TOKEN"
+TG_CHANNELS="$TG_CHANNELS"
+KEYWORDS="$KEYWORDS"
+EOF
+    echo -e "${GREEN}✅ 配置已保存到 $CONFIG_FILE${PLAIN}"
+}
+
+# ============================================
+# 初始化配置（支持保留旧值）
+# ============================================
+
+initial_config() {
+    echo -e "${BLUE}======================================${PLAIN}"
+    echo -e "${PURPLE} nodeseek 配置向导${PLAIN}"
+    echo -e "${BLUE}======================================${PLAIN}"
+    echo ""
+    echo "提示：按 Enter 保留当前配置，输入新值将覆盖原配置。"
+    echo ""
+
+    # 若存在旧配置则读取
+    if [ -f "$CONFIG_FILE" ]; then
+        source "$CONFIG_FILE"
+    fi
+
+    # --- PushPlus Token ---
+    if [ -n "$PUSHPLUS_TOKEN" ]; then
+        local token_display="${PUSHPLUS_TOKEN:0:10}...${PUSHPLUS_TOKEN: -4}"
+        read -rp "请输入 PushPlus Token [当前: $token_display]: " new_token
+        [[ -z "$new_token" ]] && new_token="$PUSHPLUS_TOKEN"
+    else
+        read -rp "请输入 PushPlus Token: " new_token
+        while [[ -z "$new_token" ]]; do
+            echo "❌ Token 不能为空，请重新输入。"
+            read -rp "请输入 PushPlus Token: " new_token
+        done
+    fi
+
+    # --- Telegram Channel(s) ---
+    if [ -n "$TG_CHANNELS" ]; then
+        read -rp "请输入要监控的 Telegram 频道 [当前: $TG_CHANNELS] (可输入多个或URL): " new_channels
+        [[ -z "$new_channels" ]] && new_channels="$TG_CHANNELS"
+    else
+        read -rp "请输入要监控的 Telegram 频道（多个用空格分隔）: " new_channels
+        while [[ -z "$new_channels" ]]; do
+            echo "❌ 频道不能为空，请重新输入。"
+            read -rp "请输入频道名或URL: " new_channels
+        done
+    fi
+
+    # --- 关键词过滤 ---
+    if [ -n "$KEYWORDS" ]; then
+        read -rp "请输入关键词过滤 [当前: $KEYWORDS] (留空保留): " new_keywords
+        [[ -z "$new_keywords" ]] && new_keywords="$KEYWORDS"
+    else
+        read -rp "请输入关键词过滤（如：上架 库存 补货），留空则不过滤: " new_keywords
+    fi
+
+    # 保存配置
+    PUSHPLUS_TOKEN="$new_token"
+    TG_CHANNELS="$new_channels"
+    KEYWORDS="$new_keywords"
+    write_config
+
+    echo ""
+    echo -e "${GREEN}✅ 配置已更新并保存成功！${PLAIN}"
+    echo ""
+    read_config
+}
+
+# ============================================
+# 推送到 PushPlus
+# ============================================
+pushplus_send() {
+    local title="$1"
+    local content="$2"
+    curl -s -X POST "http://www.pushplus.plus/send" \
+        -H "Content-Type: application/json" \
+        -d "{\"token\":\"${PUSHPLUS_TOKEN}\",\"title\":\"${title}\",\"content\":\"${content}\",\"template\":\"markdown\"}" \
+        >/dev/null
+}
+# ============================================
+# 提取标题函数
+# ============================================
+extract_title() {
+    local message="$1"
+    local pattern='^( *[0-9]+ ?(views?|次)? *$)|^[0-9]{1,2}:[0-9]{2}$|^[0-9]{4}/[0-9]{2}/[0-9]{2}'
+    if [[ -z "$message" || "$message" =~ $pattern ]]; then
+        echo ""
+        return
+    fi
+    if [[ "$message" =~ 【([^】]+)】 ]]; then
+        title="${BASH_REMATCH[1]}"
+    else
+        title=$(echo "$message" | head -n1)
+    fi
+    if [[ -z "$title" || ${#title} -lt 5 || "$title" =~ $pattern ]]; then
+        title=""
+    fi
+    echo "$title"
+}
+# ============================================
+# 获取频道最新一条消息的标题
+# ============================================
+get_latest_message() {
+    local channel="$1"
+    # 自动识别是否为完整URL
+    if [[ "$channel" =~ ^https?://t\.me/s/ ]]; then
+        local url="$channel"
+    else
+        local url="https://t.me/s/${channel}"
+    fi
+    # 抓取HTML，模拟浏览器 + 压缩 + 重试
+    local html=$(curl -s --compressed -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36" "$url" || echo "")
+    [[ -z "$html" ]] && echo "" && return
+    # 提取最后一个消息文本块（匹配当前Telegram class，无 js-message_text）
+    local message=$(echo "$html" | awk '
+        BEGIN { RS="</div>" } # 以 </div> 分隔记录
+        /tgme_widget_message_text/ && !/tgme_widget_message_views/ && !/tgme_widget_message_date/ {
+            gsub(/.*tgme_widget_message_text[^>]*>/, ""); # 移除开头标签
+            gsub(/<[^>]+>/, ""); # 移除所有HTML标签
+            gsub(/^[ \t\n\r]+|[ \t\n\r]+$/, ""); # 清理空白
+            if (length($0) > 0) messages[NR] = $0;
+        }
+        END {
+            if (length(messages) > 0) {
+                for (i in messages) last = messages[i]; # 取最后一个
+                print last;
+            }
+        }
+    ')
+    # 如果 awk 没提取到，备用方案（极少情况）
+    if [[ -z "$message" ]]; then
+        message=$(echo "$html" | grep -Poz '(?s)<div class="tgme_widget_message_text[^>]*>(.*?)</div>' | tail -n1 | sed 's/<[^>]*>//g; s/^[\n ]*//; s/[\n ]*$//')
+    fi
+    # 替换<br>为换行
+    message=$(echo "$message" | sed 's/<br>/\n/gI')
+    # 解码常见HTML实体（增强版，添加 $、@ 等）
+    message=$(echo "$message" | sed 's/&nbsp;/ /g; s/&amp;/\&/g; s/&lt;/</g; s/&gt;/>/g; s/&quot;/"/g; s/&#036;/$/g; s/&#64;/@/g; s/&#10;/\n/g; s/&#13;//g')
+    # 清理多余空白和空行，但保留换行结构
+    message=$(echo "$message" | sed 's/^[ \t]*//; s/[ \t]*$//' | awk 'NF > 0 {print $0}')
+    echo "$(extract_title "$message")"
+}
+# ============================================
+# 检查频道更新并推送（支持多条更新）
+# ============================================
+check_channels() {
+    read_config || return
+    for ch in $TG_CHANNELS; do
+        local STATE_FILE="$WORK_DIR/last_${ch}.txt"
+        local html=$(curl -s --compressed -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" "https://t.me/s/${ch}")
+        [[ -z "$html" ]] && continue
+        # 提取最近10条消息块
+        local raw_messages=()
+        while IFS= read -r line; do
+            raw_messages+=("$line")
+        done < <(echo "$html" | awk '
+            BEGIN { RS="</div>" }
+            /tgme_widget_message_text/ && !/tgme_widget_message_views/ && !/tgme_widget_message_date/ {
+                gsub(/.*tgme_widget_message_text[^>]*>/, "")
+                gsub(/<br>/, "\n")
+                gsub(/<[^>]+>/, "")
+                gsub(/&nbsp;/, " ")
+                gsub(/&amp;/, "&")
+                gsub(/&lt;/, "<")
+                gsub(/&gt;/, ">")
+                gsub(/&quot;/, "\"")
+                gsub(/&#036;/, "$")
+                gsub(/&#64;/, "@")
+                gsub(/^[ \t\n\r]+|[ \t\n\r]+$/, "")
+                if (length($0) > 0) print $0
+            }
+        ' | tail -n 10)
+        # 提取标题
+        local messages=()
+        for raw in "${raw_messages[@]}"; do
+            title=$(extract_title "$raw")
+            [[ -n "$title" ]] && messages+=("$title")
+        done
+        # 如果没有消息
+        [[ ${#messages[@]} -eq 0 ]] && continue
+        # 读取上次缓存
+        local last_content=$(cat "$STATE_FILE" 2>/dev/null || echo "")
+        # 收集新增的消息
+        local new_msgs=()
+        for msg in "${messages[@]}"; do
+            if ! grep -qF "$msg" <<< "$last_content"; then
+                new_msgs+=("$msg")
+            fi
+        done
+        # 如果没有新消息，跳过
+        [[ ${#new_msgs[@]} -eq 0 ]] && continue
+        # 关键词过滤 + 拼接
+        local push_list=""
+        for msg in "${new_msgs[@]}"; do
+            local match=0
+            if [[ -n "$KEYWORDS" ]]; then
+                for kw in $KEYWORDS; do
+                    if [[ "$msg" == *"$kw"* ]]; then
+                        match=1
+                        break
+                    fi
+                done
+            fi
+            [[ $match -eq 1 ]] && push_list+="${msg}\n\n--------------------------------------\n"
+        done
+        # 若有匹配结果则推送
+        if [[ -n "$push_list" ]]; then
+            local title="📡 频道更新：${ch}"
+            local content="🕒 时间：$(date '+%Y-%m-%d %H:%M:%S')<br>频道：${ch}<br><br>以下为新消息：<br><br>${push_list//\n/<br>}"
+            local resp=$(curl -s -X POST "http://www.pushplus.plus/send" \
+                -H "Content-Type: application/json" \
+                -d "{\"token\":\"${PUSHPLUS_TOKEN}\",\"title\":\"${title}\",\"content\":\"${content}\",\"template\":\"markdown\"}")
+            if echo "$resp" | grep -q '"code":200'; then
+                echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ [$ch] 推送成功（${#new_msgs[@]} 条）" >> "$LOG_FILE"
+            else
+                echo "$(date '+%Y-%m-%d %H:%M:%S') ❌ [$ch] 推送失败: $resp" >> "$LOG_FILE"
+            fi
+        fi
+        # 更新缓存（保存当前10条）
+        printf "%s\n" "${messages[@]}" > "$STATE_FILE"
+    done
+}
+# ============================================
+# 手动打印 / 推送
+# ============================================
+print_latest() {
+    read_config || return
+    echo -e "${BLUE}======================================${PLAIN}"
+    echo -e "${PURPLE} 最新频道消息标题${PLAIN}"
+    echo -e "${BLUE}======================================${PLAIN}"
+    for ch in $TG_CHANNELS; do
+        local STATE_FILE="$WORK_DIR/last_${ch}.txt"
+        echo -e "${CYAN}频道：$ch${PLAIN}"
+        if [ ! -s "$STATE_FILE" ]; then
+            echo "最新标题：（暂无消息或提取失败）"
+        else
+            echo -e "最新10条标题（最新在下）："
+            i=1
+            while read -r title; do
+                echo "${i}) ${title}"
+                ((i++))
+            done < "$STATE_FILE"
+        fi
+        echo "--------------------------------------"
+    done
+}
+
+
+manual_push() {
+    read_config || return
+    for ch in $TG_CHANNELS; do
+        local STATE_FILE="$WORK_DIR/last_${ch}.txt"
+        echo -e "${CYAN}频道：$ch${PLAIN}"
+
+        if [ ! -s "$STATE_FILE" ]; then
+            echo "❌ 无法推送 [$ch]，没有可用消息。"
+            continue
+        fi
+
+        # 取最后 10 条消息（按文件顺序，最新在下）
+        local messages=()
+        while IFS= read -r line; do
+            messages+=("$line")
+        done < "$STATE_FILE"
+
+        local total=${#messages[@]}
+        local start=$((total > 10 ? total - 10 : 0))
+
+        # 组合推送文本
+        local push_text=""
+        local i=1
+        for ((idx=start; idx<total; idx++)); do
+            push_text+="${i}) ${messages[$idx]}\n"
+            ((i++))
+        done
+
+        # 推送消息
+        pushplus_send "手动推送 [$ch]" "$push_text"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ 手动推送成功 [$ch]" >> "$LOG_FILE"
+    done
+
+    echo "✅ 手动推送完成。"
+}
+
+# ============================================
+# 测试 PushPlus 推送功能
+# ============================================
+test_pushplus_notification() {
+    read_config || return
+    echo -e "${CYAN}正在发送测试推送...${PLAIN}"
+    local now_time=$(date '+%Y-%m-%d %H:%M:%S')
+    local test_title="🔔 [监控测试消息]"
+    local test_content="🕒 时间：${now_time}<br>📢 频道：${TG_CHANNELS:-未设置}<br><br>这是来自 VPS 监控脚本的测试消息。<br>如果您看到此推送，说明 PushPlus 配置正常 ✅"
+    local response=$(curl -s -X POST "http://www.pushplus.plus/send" \
+        -H "Content-Type: application/json" \
+        -d "{\"token\":\"${PUSHPLUS_TOKEN}\",\"title\":\"${test_title}\",\"content\":\"${test_content}\",\"template\":\"markdown\"}")
+    if echo "$response" | grep -q '"code":200'; then
+        echo -e "${GREEN}✅ PushPlus 测试推送成功！${PLAIN}"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ 测试推送成功" >> "$LOG_FILE"
+    else
+        echo -e "${RED}❌ 推送失败！${PLAIN}"
+        echo "返回信息：$response"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') ❌ 测试推送失败：$response" >> "$LOG_FILE"
+    fi
+}
+# ============================================
+# 定时运行（cron模式）
+# ============================================
+if [[ "$1" == "-cron" ]]; then
+    while true; do
+        check_channels
+        sleep 1
+    done
+    exit 0
+fi
+# ============================================
+# 设置定时任务
+# ============================================
+setup_cron() {
+    read_config || return
+    local entry="* * * * * /usr/bin/flock -n /tmp/vps_moniter.lock $SCRIPT_PATH -cron"
+    crontab -l 2>/dev/null | grep -v "vps_moniter.sh" | { cat; echo "$entry"; } | crontab -
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ Crontab 已更新。" | tee -a "$CRON_LOG"
+}
+# ============================================
+# 主菜单
+# ============================================
+main_menu() {
+    while true; do
+        clear
+        echo -e "${BLUE}======================================${PLAIN}"
+        echo -e "${PURPLE} VPS 监控管理菜单${PLAIN}"
+        echo -e "${BLUE}======================================${PLAIN}"
+        echo -e "${GREEN}1.${PLAIN} 安装 / 修改配置"
+        echo -e "${GREEN}2.${PLAIN} 打印最新消息"
+        echo -e "${GREEN}3.${PLAIN} 推送最新消息"
+        echo -e "${GREEN}4.${PLAIN} 推送测试消息"
+        echo -e "${RED}5.${PLAIN} 停止cron任务"
+        echo -e "${WHITE}0.${PLAIN} 退出"
+        echo -e "${BLUE}======================================${PLAIN}"
+        read -rp "请选择操作 [0-6]: " choice
+        echo
+        case $choice in
+            1) initial_config; setup_cron; echo -e "${GREEN}操作完成。${PLAIN}" ;;
+            2) print_latest; echo -e "${GREEN}操作完成。${PLAIN}" ;;
+            3) manual_push; echo -e "${GREEN}操作完成。${PLAIN}" ;;
+            4) test_pushplus_notification; echo -e "${GREEN}操作完成。${PLAIN}" ;;
+            5)
+                crontab -l | grep -v "vps_moniter.sh" | crontab -
+                echo -e "${RED}已停止定时任务并清理配置。${PLAIN}"
+                echo -e "${GREEN}操作完成。${PLAIN}"
+                ;;
+            0) exit 0 ;;
+            *) echo "无效选项"; echo -e "${GREEN}操作完成。${PLAIN}" ;;
+        esac
+        read -p "按 Enter 返回菜单..."
+    done
+}
+main_menu
