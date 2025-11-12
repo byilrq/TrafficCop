@@ -259,24 +259,54 @@ print_latest() {
         if [ ! -s "$STATE_FILE" ]; then
             echo "最新标题：（暂无消息或提取失败）"
         else
-            echo -e "最新10条标题（最新在上）："
-            tac "$STATE_FILE" | while read -r title; do
-                echo "$title"
-            done
+            echo -e "最新10条标题（最新在下）："
+            i=1
+            while read -r title; do
+                echo "${i}) ${title}"
+                ((i++))
+            done < "$STATE_FILE"
         fi
         echo "--------------------------------------"
     done
 }
+
+
 manual_push() {
     read_config || return
     for ch in $TG_CHANNELS; do
-        latest=$(get_latest_message "$ch")
-        [[ -z "$latest" ]] && continue
-        pushplus_send "手动推送 [$ch]" "$latest"
+        local STATE_FILE="$WORK_DIR/last_${ch}.txt"
+        echo -e "${CYAN}频道：$ch${PLAIN}"
+
+        if [ ! -s "$STATE_FILE" ]; then
+            echo "❌ 无法推送 [$ch]，没有可用消息。"
+            continue
+        fi
+
+        # 取最后 10 条消息（按文件顺序，最新在下）
+        local messages=()
+        while IFS= read -r line; do
+            messages+=("$line")
+        done < "$STATE_FILE"
+
+        local total=${#messages[@]}
+        local start=$((total > 10 ? total - 10 : 0))
+
+        # 组合推送文本
+        local push_text=""
+        local i=1
+        for ((idx=start; idx<total; idx++)); do
+            push_text+="${i}) ${messages[$idx]}\n"
+            ((i++))
+        done
+
+        # 推送消息
+        pushplus_send "手动推送 [$ch]" "$push_text"
         echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ 手动推送成功 [$ch]" >> "$LOG_FILE"
     done
+
     echo "✅ 手动推送完成。"
 }
+
 # ============================================
 # 测试 PushPlus 推送功能
 # ============================================
@@ -327,20 +357,20 @@ main_menu() {
         echo -e "${PURPLE} VPS 监控管理菜单${PLAIN}"
         echo -e "${BLUE}======================================${PLAIN}"
         echo -e "${GREEN}1.${PLAIN} 安装 / 修改配置"
-        echo -e "${GREEN}3.${PLAIN} 打印频道最新消息"
-        echo -e "${GREEN}4.${PLAIN} 推送最新消息"
-        echo -e "${GREEN}5.${PLAIN} 推送测试消息"
-        echo -e "${RED}6.${PLAIN} 停止并删除任务"
+        echo -e "${GREEN}2.${PLAIN} 打印最新消息"
+        echo -e "${GREEN}3.${PLAIN} 推送最新消息"
+        echo -e "${GREEN}4.${PLAIN} 推送测试消息"
+        echo -e "${RED}5.${PLAIN} 停止cron任务"
         echo -e "${WHITE}0.${PLAIN} 退出"
         echo -e "${BLUE}======================================${PLAIN}"
         read -rp "请选择操作 [0-6]: " choice
         echo
         case $choice in
             1) initial_config; setup_cron; echo -e "${GREEN}操作完成。${PLAIN}" ;;
-            3) print_latest; echo -e "${GREEN}操作完成。${PLAIN}" ;;
-            4) manual_push; echo -e "${GREEN}操作完成。${PLAIN}" ;;
-            5) test_pushplus_notification; echo -e "${GREEN}操作完成。${PLAIN}" ;;
-            6)
+            2) print_latest; echo -e "${GREEN}操作完成。${PLAIN}" ;;
+            3) manual_push; echo -e "${GREEN}操作完成。${PLAIN}" ;;
+            4) test_pushplus_notification; echo -e "${GREEN}操作完成。${PLAIN}" ;;
+            5)
                 crontab -l | grep -v "vps_moniter.sh" | crontab -
                 echo -e "${RED}已停止定时任务并清理配置。${PLAIN}"
                 echo -e "${GREEN}操作完成。${PLAIN}"
