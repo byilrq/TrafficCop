@@ -1,3 +1,4 @@
+```bash
 #!/bin/bash
 # ============================================
 # Telegram Channel → PushPlus VPS监控脚本 v1.0
@@ -13,6 +14,29 @@ SCRIPT_PATH="$WORK_DIR/vps_moniter.sh"
 RED="\033[31m"; GREEN="\033[32m"; YELLOW="\033[33m"
 BLUE="\033[34m"; PURPLE="\033[35m"; CYAN="\033[36m"; WHITE="\033[37m"; PLAIN="\033[0m"
 export TZ='Asia/Shanghai'
+# ============================================
+# 配置文件管理
+# ============================================
+read_config() {
+    if [ ! -s "$CONFIG_FILE" ]; then
+        echo "配置文件不存在或为空。"
+        return 1
+    fi
+    source "$CONFIG_FILE"
+    if [ -z "$PUSHPLUS_TOKEN" ] || [ -z "$TG_CHANNELS" ]; then
+        echo "配置不完整。"
+        return 1
+    fi
+    return 0
+}
+write_config() {
+    cat > "$CONFIG_FILE" <<EOF
+PUSHPLUS_TOKEN="$PUSHPLUS_TOKEN"
+TG_CHANNELS="$TG_CHANNELS"
+KEYWORDS="$KEYWORDS"
+EOF
+    echo -e "${GREEN}✅ 配置已保存到 $CONFIG_FILE${PLAIN}"
+}
 # ============================================
 # 初始化配置（带保留旧值逻辑）
 # ============================================
@@ -70,15 +94,15 @@ initial_config() {
     read_config
 }
 # ============================================
-# 配置文件管理
+# 推送到 PushPlus
 # ============================================
-write_config() {
-    cat > "$CONFIG_FILE" <<EOF
-PUSHPLUS_TOKEN="$PUSHPLUS_TOKEN"
-TG_CHANNELS="$TG_CHANNELS"
-KEYWORDS="$KEYWORDS"
-EOF
-    echo -e "${GREEN}✅ 配置已保存到 $CONFIG_FILE${PLAIN}"
+pushplus_send() {
+    local title="$1"
+    local content="$2"
+    curl -s -X POST "http://www.pushplus.plus/send" \
+        -H "Content-Type: application/json" \
+        -d "{\"token\":\"${PUSHPLUS_TOKEN}\",\"title\":\"${title}\",\"content\":\"${content}\",\"template\":\"markdown\"}" \
+        >/dev/null
 }
 # ============================================
 # 提取标题函数
@@ -244,6 +268,37 @@ print_latest() {
         echo "--------------------------------------"
     done
 }
+manual_push() {
+    read_config || return
+    for ch in $TG_CHANNELS; do
+        latest=$(get_latest_message "$ch")
+        [[ -z "$latest" ]] && continue
+        pushplus_send "手动推送 [$ch]" "$latest"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ 手动推送成功 [$ch]" >> "$LOG_FILE"
+    done
+    echo "✅ 手动推送完成。"
+}
+# ============================================
+# 测试 PushPlus 推送功能
+# ============================================
+test_pushplus_notification() {
+    read_config || return
+    echo -e "${CYAN}正在发送测试推送...${PLAIN}"
+    local now_time=$(date '+%Y-%m-%d %H:%M:%S')
+    local test_title="🔔 [监控测试消息]"
+    local test_content="🕒 时间：${now_time}<br>📢 频道：${TG_CHANNELS:-未设置}<br><br>这是来自 VPS 监控脚本的测试消息。<br>如果您看到此推送，说明 PushPlus 配置正常 ✅"
+    local response=$(curl -s -X POST "http://www.pushplus.plus/send" \
+        -H "Content-Type: application/json" \
+        -d "{\"token\":\"${PUSHPLUS_TOKEN}\",\"title\":\"${test_title}\",\"content\":\"${test_content}\",\"template\":\"markdown\"}")
+    if echo "$response" | grep -q '"code":200'; then
+        echo -e "${GREEN}✅ PushPlus 测试推送成功！${PLAIN}"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ 测试推送成功" >> "$LOG_FILE"
+    else
+        echo -e "${RED}❌ 推送失败！${PLAIN}"
+        echo "返回信息：$response"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') ❌ 测试推送失败：$response" >> "$LOG_FILE"
+    fi
+}
 # ============================================
 # 定时运行（cron模式）
 # ============================================
@@ -297,3 +352,5 @@ main_menu() {
         read -p "按 Enter 返回菜单..."
     done
 }
+main_menu
+```
