@@ -13,30 +13,7 @@ SCRIPT_PATH="$WORK_DIR/vps_moniter.sh"
 RED="\033[31m"; GREEN="\033[32m"; YELLOW="\033[33m"
 BLUE="\033[34m"; PURPLE="\033[35m"; CYAN="\033[36m"; WHITE="\033[37m"; PLAIN="\033[0m"
 export TZ='Asia/Shanghai'
-# ============================================
-# 配置文件管理
-# ============================================
-read_config() {
-    if [ ! -s "$CONFIG_FILE" ]; then
-        echo "配置文件不存在或为空。"
-        return 1
-    fi
-    source "$CONFIG_FILE"
-    if [ -z "$PUSHPLUS_TOKEN" ] || [ -z "$TG_CHANNELS" ]; then
-        echo "配置不完整。"
-        return 1
-    fi
-    return 0
-}
-write_config() {
-    cat > "$CONFIG_FILE" <<EOF
-PUSHPLUS_TOKEN="$PUSHPLUS_TOKEN"
-TG_CHANNELS="$TG_CHANNELS"
-KEYWORDS="$KEYWORDS"
-CHECK_INTERVAL="$CHECK_INTERVAL"
-EOF
-    echo -e "${GREEN}✅ 配置已保存到 $CONFIG_FILE${PLAIN}"
-}
+```bash
 # ============================================
 # 初始化配置（带保留旧值逻辑）
 # ============================================
@@ -83,25 +60,10 @@ initial_config() {
     else
         read -rp "请输入关键词过滤（如：上架 库存 补货），留空则不过滤: " new_keywords
     fi
-    # --- 检查周期 ---
-    if [ -n "$CHECK_INTERVAL" ]; then
-        read -rp "请输入检查周期 [当前: ${CHECK_INTERVAL}s]: " new_interval
-    else
-        read -rp "请输入检查周期（单位：秒，如 60 表示每分钟）: " new_interval
-    fi
-    if [[ -z "$new_interval" && -n "$CHECK_INTERVAL" ]]; then
-        new_interval="$CHECK_INTERVAL"
-        echo " → 保留原配置"
-    fi
-    while [[ -z "$new_interval" || ! "$new_interval" =~ ^[0-9]+$ ]]; do
-        echo "❌ 周期必须是数字。请重新输入: "
-        read -rp "检查周期（秒）: " new_interval
-    done
     # --- 写入配置 ---
     PUSHPLUS_TOKEN="$new_token"
     TG_CHANNELS="$new_channels"
     KEYWORDS="$new_keywords"
-    CHECK_INTERVAL="$new_interval"
     write_config
     echo ""
     echo -e "${GREEN}✅ 配置已更新成功！${PLAIN}"
@@ -109,15 +71,35 @@ initial_config() {
     read_config
 }
 # ============================================
-# 推送到 PushPlus
+# 配置文件管理
 # ============================================
-pushplus_send() {
-    local title="$1"
-    local content="$2"
-    curl -s -X POST "http://www.pushplus.plus/send" \
-        -H "Content-Type: application/json" \
-        -d "{\"token\":\"${PUSHPLUS_TOKEN}\",\"title\":\"${title}\",\"content\":\"${content}\",\"template\":\"markdown\"}" \
-        >/dev/null
+write_config() {
+    cat > "$CONFIG_FILE" <<EOF
+PUSHPLUS_TOKEN="$PUSHPLUS_TOKEN"
+TG_CHANNELS="$TG_CHANNELS"
+KEYWORDS="$KEYWORDS"
+EOF
+    echo -e "${GREEN}✅ 配置已保存到 $CONFIG_FILE${PLAIN}"
+}
+# ============================================
+# 提取标题函数
+# ============================================
+extract_title() {
+    local message="$1"
+    local pattern='^( *[0-9]+ ?(views?|次)? *$)|^[0-9]{1,2}:[0-9]{2}$|^[0-9]{4}/[0-9]{2}/[0-9]{2}'
+    if [[ -z "$message" || "$message" =~ $pattern ]]; then
+        echo ""
+        return
+    fi
+    if [[ "$message" =~ 【([^】]+)】 ]]; then
+        title="${BASH_REMATCH[1]}"
+    else
+        title=$(echo "$message" | head -n1)
+    fi
+    if [[ -z "$title" || ${#title} -lt 5 || "$title" =~ $pattern ]]; then
+        title=""
+    fi
+    echo "$title"
 }
 # ============================================
 # 获取频道最新一条消息的标题
@@ -159,20 +141,8 @@ get_latest_message() {
     message=$(echo "$message" | sed 's/&nbsp;/ /g; s/&amp;/\&/g; s/&lt;/</g; s/&gt;/>/g; s/&quot;/"/g; s/&#036;/$/g; s/&#64;/@/g; s/&#10;/\n/g; s/&#13;//g')
     # 清理多余空白和空行，但保留换行结构
     message=$(echo "$message" | sed 's/^[ \t]*//; s/[ \t]*$//' | awk 'NF > 0 {print $0}')
-    # 提取标题：假设标题是消息的第一行，或者匹配【.*】
-    if [[ "$message" =~ 【([^】]+)】 ]]; then
-        title="${BASH_REMATCH[1]}"
-    else
-        title=$(echo "$message" | head -n1)
-    fi
-    # 过滤掉明显是视图/日期/空的消息（views 可能是纯数字、"xxviews" 或 "xx views"）
-    local pattern='^( *[0-9]+ ?(views?|次)? *$)|^[0-9]{1,2}:[0-9]{2}$|^[0-9]{4}/[0-9]{2}/[0-9]{2}'
-    if [[ -z "$title" || ${#title} -lt 5 || "$title" =~ $pattern ]]; then
-        title=""
-    fi
-    echo "$title"
+    echo "$(extract_title "$message")"
 }
-
 # ============================================
 # 检查频道更新并推送（支持多条更新）
 # ============================================
@@ -183,9 +153,9 @@ check_channels() {
         local html=$(curl -s --compressed -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" "https://t.me/s/${ch}")
         [[ -z "$html" ]] && continue
         # 提取最近10条消息块
-        local messages=()
+        local raw_messages=()
         while IFS= read -r line; do
-            messages+=("$line")
+            raw_messages+=("$line")
         done < <(echo "$html" | awk '
             BEGIN { RS="</div>" }
             /tgme_widget_message_text/ && !/tgme_widget_message_views/ && !/tgme_widget_message_date/ {
@@ -203,6 +173,12 @@ check_channels() {
                 if (length($0) > 0) print $0
             }
         ' | tail -n 10)
+        # 提取标题
+        local messages=()
+        for raw in "${raw_messages[@]}"; do
+            title=$(extract_title "$raw")
+            [[ -n "$title" ]] && messages+=("$title")
+        done
         # 如果没有消息
         [[ ${#messages[@]} -eq 0 ]] && continue
         # 读取上次缓存
@@ -227,8 +203,6 @@ check_channels() {
                         break
                     fi
                 done
-            else
-                match=1 # 无关键词则不过滤
             fi
             [[ $match -eq 1 ]] && push_list+="${msg}\n\n--------------------------------------\n"
         done
@@ -249,9 +223,8 @@ check_channels() {
         printf "%s\n" "${messages[@]}" > "$STATE_FILE"
     done
 }
-
 # ============================================
-# 手动打印
+# 手动打印 / 推送
 # ============================================
 print_latest() {
     read_config || return
@@ -259,41 +232,29 @@ print_latest() {
     echo -e "${PURPLE} 最新频道消息标题${PLAIN}"
     echo -e "${BLUE}======================================${PLAIN}"
     for ch in $TG_CHANNELS; do
-        local msg=$(get_latest_message "$ch")
+        local STATE_FILE="$WORK_DIR/last_${ch}.txt"
         echo -e "${CYAN}频道：$ch${PLAIN}"
-        if [[ -z "$msg" ]]; then
+        if [ ! -s "$STATE_FILE" ]; then
             echo "最新标题：（暂无消息或提取失败）"
         else
-            echo -e "最新标题：\n$msg"
+            echo -e "最新10条标题（最新在上）："
+            tac "$STATE_FILE" | while read -r title; do
+                echo "$title"
+            done
         fi
         echo "--------------------------------------"
     done
-    # 移除这里的 read -p，统一由主循环处理
-}
-
-# ============================================
-# 手动推送
-# ============================================
-
-manual_push() {
-    read_config || return
-    for ch in $TG_CHANNELS; do
-        latest=$(get_latest_message "$ch")
-        [[ -z "$latest" ]] && continue
-        pushplus_send "手动推送 [$ch]" "$latest"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ 手动推送成功 [$ch]" >> "$LOG_FILE"
-    done
-    echo "✅ 手动推送完成。"
-    # 移除这里的 read -p，统一由主循环处理
 }
 # ============================================
 # 定时运行（cron模式）
 # ============================================
 if [[ "$1" == "-cron" ]]; then
-    check_channels
+    while true; do
+        check_channels
+        sleep 1
+    done
     exit 0
 fi
-
 # ============================================
 # 设置定时任务
 # ============================================
@@ -302,28 +263,6 @@ setup_cron() {
     local entry="* * * * * /usr/bin/flock -n /tmp/vps_moniter.lock $SCRIPT_PATH -cron"
     crontab -l 2>/dev/null | grep -v "vps_moniter.sh" | { cat; echo "$entry"; } | crontab -
     echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ Crontab 已更新。" | tee -a "$CRON_LOG"
-}
-
-# ============================================
-# 测试 PushPlus 推送功能
-# ============================================
-test_pushplus_notification() {
-    read_config || return
-    echo -e "${CYAN}正在发送测试推送...${PLAIN}"
-    local now_time=$(date '+%Y-%m-%d %H:%M:%S')
-    local test_title="🔔 [监控测试消息]"
-    local test_content="🕒 时间：${now_time}<br>📢 频道：${TG_CHANNELS:-未设置}<br><br>这是来自 VPS 监控脚本的测试消息。<br>如果您看到此推送，说明 PushPlus 配置正常 ✅"
-    local response=$(curl -s -X POST "http://www.pushplus.plus/send" \
-        -H "Content-Type: application/json" \
-        -d "{\"token\":\"${PUSHPLUS_TOKEN}\",\"title\":\"${test_title}\",\"content\":\"${test_content}\",\"template\":\"markdown\"}")
-    if echo "$response" | grep -q '"code":200'; then
-        echo -e "${GREEN}✅ PushPlus 测试推送成功！${PLAIN}"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ 测试推送成功" >> "$LOG_FILE"
-    else
-        echo -e "${RED}❌ 推送失败！${PLAIN}"
-        echo "返回信息：$response"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') ❌ 测试推送失败：$response" >> "$LOG_FILE"
-    fi
 }
 # ============================================
 # 主菜单
@@ -335,7 +274,6 @@ main_menu() {
         echo -e "${PURPLE} VPS 监控管理菜单${PLAIN}"
         echo -e "${BLUE}======================================${PLAIN}"
         echo -e "${GREEN}1.${PLAIN} 安装 / 修改配置"
-        echo -e "${GREEN}2.${PLAIN} 设置查询周期 (当前: ${CHECK_INTERVAL:-未设}) 秒"
         echo -e "${GREEN}3.${PLAIN} 打印频道最新消息"
         echo -e "${GREEN}4.${PLAIN} 推送最新消息"
         echo -e "${GREEN}5.${PLAIN} 推送测试消息"
@@ -346,12 +284,6 @@ main_menu() {
         echo
         case $choice in
             1) initial_config; setup_cron; echo -e "${GREEN}操作完成。${PLAIN}" ;;
-            2)
-                read -rp "请输入新的周期(秒): " CHECK_INTERVAL
-                write_config
-                echo -e "${GREEN}✅ 周期已更新${PLAIN}"
-                echo -e "${GREEN}操作完成。${PLAIN}"
-                ;;
             3) print_latest; echo -e "${GREEN}操作完成。${PLAIN}" ;;
             4) manual_push; echo -e "${GREEN}操作完成。${PLAIN}" ;;
             5) test_pushplus_notification; echo -e "${GREEN}操作完成。${PLAIN}" ;;
@@ -360,11 +292,9 @@ main_menu() {
                 echo -e "${RED}已停止定时任务并清理配置。${PLAIN}"
                 echo -e "${GREEN}操作完成。${PLAIN}"
                 ;;
-               
             0) exit 0 ;;
             *) echo "无效选项"; echo -e "${GREEN}操作完成。${PLAIN}" ;;
         esac
         read -p "按 Enter 返回菜单..."
     done
 }
-main_menu
