@@ -1,4 +1,3 @@
-```bash
 #!/bin/bash
 # ============================================
 # Telegram Channel → PushPlus VPS监控脚本 v1.0
@@ -353,4 +352,3 @@ main_menu() {
     done
 }
 main_menu
-```
