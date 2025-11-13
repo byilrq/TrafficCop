@@ -85,6 +85,8 @@ initial_config() {
         done
     fi
 
+    # --- 启动写入cron 任务设置 ---
+    setup_cron;
     # --- 关键词过滤设置 ---
     echo ""
     echo "当前关键词：${KEYWORDS:-未设置}"
@@ -634,7 +636,7 @@ main_menu() {
         read -rp "请选择操作 [0-6]: " choice
         echo
         case $choice in
-            1) initial_config; setup_cron; echo -e "${GREEN}操作完成。${PLAIN}" ;;
+            1) initial_config; echo -e "${GREEN}操作完成。${PLAIN}" ;;
             2) print_latest; echo -e "${GREEN}操作完成。${PLAIN}" ;;
             3) manual_push; echo -e "${GREEN}操作完成。${PLAIN}" ;;
             4) get_latest_message; echo -e "${GREEN}操作完成。${PLAIN}" ;;
