@@ -614,28 +614,19 @@ stop_cron() {
     pkill -f "nodeseek.sh -cron" 2>/dev/null
     pkill -f "nodeseekc.sh -cron" 2>/dev/null
 
-    # 强制清理所有 nodeseek*
+    echo "👉 正在终止所有 nodeseek 相关进程..."
     pkill -f "nodeseek" 2>/dev/null
     sleep 1
 
     echo "👉 正在从 crontab 删除 nodeseek 相关任务..."
 
-    # 只删除包含 nodeseek 的任务，其他保持不变
-    crontab -l 2>/dev/null | \
-        grep -v "/TrafficCop/nodeseek" | \
-        grep -v "nodeseek.sh" | \
-        grep -v "nodeseekc.sh" | \
-        grep -v "nodeseek.lock" | \
-        crontab -
+    # 🚀 使用你确认有效的强力指令，一次过滤所有 nodeseek 的 cron 项
+    crontab -l 2>/dev/null | grep -v "nodeseek" | crontab -
 
     echo "✔ 已删除所有 nodeseek 相关 cron 任务"
     echo "✔ 已停止所有 nodeseek 后台进程"
     echo "🟢 stop_cron() 完成"
 }
-
-
-
-
 # ============================================
 # 主菜单
 # ============================================
