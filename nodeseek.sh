@@ -610,22 +610,29 @@ setup_cron() {
 stop_cron() {
     echo "🛑 正在停止 nodeseek 定时任务与后台进程..."
 
-    # 终止所有 cron 进程
     echo "👉 正在终止 nodeseek -cron 进程..."
     pkill -f "nodeseek.sh -cron" 2>/dev/null
+    pkill -f "nodeseekc.sh -cron" 2>/dev/null
 
-    # 再保险：所有 nodeseek.sh 进程都停掉
-    pkill -f "nodeseek.sh" 2>/dev/null
+    # 强制清理所有 nodeseek*
+    pkill -f "nodeseek" 2>/dev/null
     sleep 1
 
-    # 删除所有包含 nodeseek 的 cron 项
     echo "👉 正在从 crontab 删除 nodeseek 相关任务..."
-    crontab -l 2>/dev/null | grep -v "nodeseek" | crontab -
 
-    echo "✔ 所有 cron 任务已完全删除"
-    echo "✔ 所有 nodeseek.sh 后台进程已终止"
+    # 只删除包含 nodeseek 的任务，其他保持不变
+    crontab -l 2>/dev/null | \
+        grep -v "/TrafficCop/nodeseek" | \
+        grep -v "nodeseek.sh" | \
+        grep -v "nodeseekc.sh" | \
+        grep -v "nodeseek.lock" | \
+        crontab -
+
+    echo "✔ 已删除所有 nodeseek 相关 cron 任务"
+    echo "✔ 已停止所有 nodeseek 后台进程"
     echo "🟢 stop_cron() 完成"
 }
+
 
 
 
