@@ -609,11 +609,11 @@ setup_cron() {
 # 关闭定时任务
 # ============================================
 stop_cron() {
-    pkill -f nodeseek
+    pkill -f nodeseek 2>/dev/null
     crontab -l 2>/dev/null | grep -v 'nodeseek' | crontab -
-    systemctl restart cron || service cron restart
+    systemctl restart cron 2>/dev/null || service cron restart 2>/dev/null
+    rm -f /root/TrafficCop/nodeseek.sh
 }
-
 # ============================================
 # 主菜单
 # ============================================
