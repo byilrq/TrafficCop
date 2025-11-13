@@ -247,7 +247,7 @@ manual_fresh() {
         if [[ ${#messages[@]} -eq 0 ]]; then
             echo "❌ 未提取到有效消息。"
             echo "--------------------------------------"
-            echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] ❌ 手动更新失败（未解析到消息）" >> "$LOG_FILE"
+            echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] ❌ 最新消息更新失败（未解析到消息）" >> "$LOG_FILE"
             continue
         fi
 
@@ -264,11 +264,12 @@ manual_fresh() {
         echo "--------------------------------------"
 
         # 只写入简单成功记录
-        echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] 更新成功" >> "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] 最新消息已更新" >> "$LOG_FILE"
     done
 
     echo -e "${GREEN}✅ 所有频道已手动更新并打印完成。${PLAIN}"
 }
+
 
 # ============================================
 # 手动推送10条新的信息
@@ -346,7 +347,6 @@ manual_push() {
         echo "✅ 推送完成（匹配 ${#matched_msgs[@]} 条）"
     done
 }
-
 # ============================================
 # 自动推送（用于 cron）—— 匹配关键词且只推送一次
 # ============================================
@@ -499,51 +499,50 @@ log_rotate() {
 # 自动限制日志文件最多 100 行（cron.log / sent.txt / nodeseek.log）
 # ============================================
 if [[ "$1" == "-cron" ]]; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') 🚀 定时任务已启动（每30秒执行一次 manual_fresh + auto_push）" >> "$CRON_LOG"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') 🚀 定时任务已启动（每30秒执行 manual_fresh + auto_push）" >> "$CRON_LOG"
 
     while true; do
 
         # ============================
-        # 限制文件最多 100 行（通用函数）
+        # 限制文件最多 100 行
         # ============================
         trim_file() {
             local file="$1"
             local max_lines=100
-
-            if [[ -f "$file" ]]; then
-                local cnt
-                cnt=$(wc -l < "$file")
-
-                if (( cnt > max_lines )); then
-                    tail -n "$max_lines" "$file" > "${file}.tmp"
-                    mv "${file}.tmp" "$file"
-                fi
+            [[ -f "$file" ]] || return
+            local cnt=$(wc -l < "$file")
+            if (( cnt > max_lines )); then
+                tail -n "$max_lines" "$file" > "${file}.tmp"
+                mv "${file}.tmp" "$file"
             fi
         }
 
-        # 1. 限制 cron 日志
         trim_file "$CRON_LOG"
-
-        # 2. 限制已推送记录
+        trim_file "$LOG_FILE"
         trim_file "$WORK_DIR/sent_nodeseekc.txt"
 
-        # 3. 限制运行日志 nodeseek.log
-        trim_file "$WORK_DIR/nodeseek.log"
-
-
         # ============================
-        # 正常执行任务
+        # 执行并写入简洁日志
         # ============================
         {
-            echo "--------------------------------------" >> "$CRON_LOG"
             echo "$(date '+%Y-%m-%d %H:%M:%S') ▶️ 执行 manual_fresh()" >> "$CRON_LOG"
-            manual_fresh >> "$CRON_LOG" 2>&1
+            manual_fresh >/dev/null 2>&1
             echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ manual_fresh() 执行完成" >> "$CRON_LOG"
 
             echo "$(date '+%Y-%m-%d %H:%M:%S') ▶️ 执行 auto_push()" >> "$CRON_LOG"
-            auto_push >> "$CRON_LOG" 2>&1
-            echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ auto_push() 执行完成" >> "$CRON_LOG"
 
+            # 捕获 auto_push 的匹配数量
+            MATCH_OUTPUT=$(auto_push 2>&1)
+
+            # 是否有匹配？
+            if echo "$MATCH_OUTPUT" | grep -q "匹配到"; then
+                MATCH_COUNT=$(echo "$MATCH_OUTPUT" | grep -oP "(?<=匹配到 ).*(?= 条)" | head -n1)
+                echo "⚠️ [nodeseekc] 本次有 ${MATCH_COUNT} 条关键词匹配   自动推送频道：nodeseekc" >> "$CRON_LOG"
+            else
+                echo "⚠️ [nodeseekc] 本次无关键词匹配" >> "$CRON_LOG"
+            fi
+
+            echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ auto_push() 执行完成" >> "$CRON_LOG"
             echo "$(date '+%Y-%m-%d %H:%M:%S') 🕒 等待30秒进入下次周期..." >> "$CRON_LOG"
             echo "" >> "$CRON_LOG"
         } &
@@ -554,10 +553,6 @@ if [[ "$1" == "-cron" ]]; then
 
     exit 0
 fi
-
-
-
-
 # ============================================
 # 设置定时任务,写入系统cron，*代表1分钟执行一次脚本
 # ============================================
