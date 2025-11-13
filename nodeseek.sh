@@ -611,11 +611,9 @@ setup_cron() {
 stop_cron() {
     pkill -f nodeseek 2>/dev/null
     sleep 1
-    [ -f /var/spool/cron/crontabs/root ] && sed -i '/nodeseek/d' /var/spool/cron/crontabs/root && chmod 600 /var/spool/cron/crontabs/root 2>/dev/null
-    [ -f /var/spool/cron/root ] && sed -i '/nodeseek/d' /var/spool/cron/root
-    [ -f /etc/crontab ] && sed -i '/nodeseek/d' /etc/crontab
-    rm -f /etc/cron.d/*nodeseek* 2>/dev/null
-    systemctl restart cron 2>/dev/null || systemctl restart crond 2>/dev/null
+    #添加强力手动可执行的命令
+    sed -i '/nodeseek/d' /var/spool/cron/root
+    systemctl restart cron || systemctl restart crond    
 }
 
 # ============================================
