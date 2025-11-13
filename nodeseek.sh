@@ -361,65 +361,71 @@ manual_push() {
 auto_push() {
     read_config || return
 
-    # 小写化关键词（忽略大小写匹配）
+    # ⬇ 将 KEYWORDS 转小写用于忽略大小写匹配
     local KEYWORDS_LOWER=$(echo "$KEYWORDS" | tr 'A-Z' 'a-z')
 
     for ch in $TG_CHANNELS; do
         local STATE_FILE="$WORK_DIR/last_${ch}.txt"
-        local SENT_FILE="$WORK_DIR/sent_${ch}.txt"
-
-        # 若 sent 文件不存在则创建
-        touch "$SENT_FILE"
-
-        echo -e "${CYAN}自动推送频道：$ch${PLAIN}"
+        echo -e "${CYAN}自动推送频道：${ch}${PLAIN}"
 
         # 未设置关键词
         if [[ -z "$KEYWORDS" ]]; then
-            echo "$(date '+%Y-%m-%d %H:%M:%S') ⚠️ [$ch] 未设置关键词，跳过自动推送。" >> "$LOG_FILE"
+            echo "❌ 未设置关键词，跳过自动推送 [$ch]。"
+            echo "$(date '+%Y-%m-%d %H:%M:%S') ⚠️ [$ch] 跳过推送：未设置关键词。" >> "$LOG_FILE"
             continue
         fi
 
-        # 缓存不存在
+        # 无缓存
         if [ ! -s "$STATE_FILE" ]; then
-            echo "$(date '+%Y-%m-%d %H:%M:%S') ⚠️ [$ch] 无缓存内容，跳过。" >> "$LOG_FILE"
+            echo "❌ 无缓存文件，跳过 [$ch]"
+            echo "$(date '+%Y-%m-%d %H:%M:%S') ⚠️ [$ch] 无缓存文件" >> "$LOG_FILE"
             continue
         fi
 
-        # 读取 last_xxx.txt 内容
+        # 读取最近10条
         local messages=()
         while IFS= read -r line; do messages+=("$line"); done < "$STATE_FILE"
 
         local total=${#messages[@]}
         local start=$(( total > 10 ? total - 10 : 0 ))
+
         local matched_msgs=()
 
-        # 遍历最近 10 条
-        for ((idx=start; idx<total; idx++)); do
+        echo "$(date '+%Y-%m-%d %H:%M:%S') ▶️ [$ch] 开始关键词扫描..." >> "$LOG_FILE"
+
+        # 逐条扫描
+        for ((idx = start; idx < total; idx++)); do
             local msg="${messages[$idx]}"
             local msg_lower=$(echo "$msg" | tr 'A-Z' 'a-z')
 
-            # 若已推送过，跳过
-            if grep -Fxq "$msg" "$SENT_FILE"; then
-                continue
-            fi
+            local matched=0
+            local matched_kw=""
 
-            # 匹配关键词（忽略大小写，OR 匹配）
+            # 遍历关键词
             for kw in $KEYWORDS_LOWER; do
                 if [[ "$msg_lower" == *"$kw"* ]]; then
-                    matched_msgs+=("$msg")
-                    echo "$msg" >> "$SENT_FILE"   # 记录已发送消息
-                    echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ [$ch] 匹配到新内容：$msg" >> "$LOG_FILE"
+                    matched=1
+                    matched_kw="$kw"
                     break
                 fi
             done
+
+            if [[ $matched -eq 1 ]]; then
+                matched_msgs+=("$msg")
+                echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ [$ch] 匹配成功：关键词『$matched_kw』消息：$msg" >> "$LOG_FILE"
+            else
+                echo "$(date '+%Y-%m-%d %H:%M:%S') ❌ [$ch] 未匹配：$msg" >> "$LOG_FILE"
+            fi
         done
 
-        # 无匹配内容
+        # 没匹配到关键词
         if [[ ${#matched_msgs[@]} -eq 0 ]]; then
+            echo "⚠️ [$ch] 无匹配关键词的消息。"
+            echo "$(date '+%Y-%m-%d %H:%M:%S') ⚠️ [$ch] 本次无匹配关键词消息。" >> "$LOG_FILE"
             continue
         fi
 
-        # 拼接推送文本
+        # 组合推送
         local push_text=""
         local i=1
         for msg in "${matched_msgs[@]}"; do
@@ -427,12 +433,13 @@ auto_push() {
             ((i++))
         done
 
-        # 推送到 PushPlus
-        pushplus_send "关键词自动推送 [$ch]" "$push_text"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') 📤 [$ch] 自动推送完成（${#matched_msgs[@]} 条）" >> "$LOG_FILE"
+        # 推送一次（不会重复）
+        pushplus_send "自动关键词推送 [$ch]" "$push_text"
+
+        echo "📨 [$ch] 已推送 ${#matched_msgs[@]} 条匹配消息。"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') 📩 [$ch] 自动推送成功（${#matched_msgs[@]} 条）" >> "$LOG_FILE"
     done
 }
-
 
 
 
