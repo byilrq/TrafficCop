@@ -441,9 +441,9 @@ auto_push() {
         done
 
         # -----------------------
-        # 执行推送
+        # 执行推送pushplus
         # -----------------------
-        pushplus_send "自动关键词推送 [$ch]" "$push_text"
+        pushplus_send "Node" "$push_text"
 
         # 写入已推送记录
         for msg in "${new_matched_msgs[@]}"; do
