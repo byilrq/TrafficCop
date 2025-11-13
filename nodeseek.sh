@@ -401,8 +401,8 @@ auto_push() {
 
             # 匹配关键词（忽略大小写）
             for kw in $KEYWORDS_LOWER; do
-              #  if [[ "$msg_lower" == *"$kw"* ]]; then
-                if [[ "$msg_lower" =~ \b"$kw"\b ]]; then
+                if [[ "$msg_lower" == *"$kw"* ]]; then
+              #  if [[ "$msg_lower" =~ \b"$kw"\b ]]; then
                     matched=1
                     matched_kw="$kw"
                     break
