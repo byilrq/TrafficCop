@@ -611,11 +611,28 @@ setup_cron() {
 # 关闭定时任务
 # ============================================
 stop_cron() {
-    pkill -f nodeseek 2>/dev/null
-    crontab -l 2>/dev/null | grep -v 'nodeseek' | crontab -
+    echo -e "${YELLOW}⏳ 正在停止 nodeseek 定时任务...${PLAIN}"
+
+    # 1) 只杀掉 “nodeseek.sh -cron” 的后台定时进程，不杀菜单本体
+    pkill -f "nodeseek.sh -cron" 2>/dev/null
+
+    # 2) 从 crontab 中移除 nodeseek 的 cron 项
+    if crontab -l 2>/dev/null | grep -q "nodeseek.sh -cron"; then
+        crontab -l 2>/dev/null | grep -v "nodeseek.sh -cron" | crontab -
+        echo -e "${GREEN}✔ 已从 crontab 中移除 nodeseek 定时任务${PLAIN}"
+    else
+        echo -e "${CYAN}ℹ 未检测到 crontab 中的 nodeseek 任务（可能已删除）${PLAIN}"
+    fi
+
+    # 3) 重启 cron 服务（避免有残留锁）
     systemctl restart cron 2>/dev/null || service cron restart 2>/dev/null
-    rm -f /root/TrafficCop/nodeseek.sh
+
+    # 4) 不再删除脚本本体（防止误删）你之前脚本有 rm -f nodeseek.sh，很危险
+    # rm -f /root/TrafficCop/nodeseek.sh  # ❌ 取消此行为！
+
+    echo -e "${GREEN}✔ nodeseek 定时监控已完全停止${PLAIN}"
 }
+
 # ============================================
 # 主菜单
 # ============================================
