@@ -353,42 +353,43 @@ manual_push() {
 auto_push() {
     read_config || return
 
-    # 将关键词转换为小写
     local KEYWORDS_LOWER=$(echo "$KEYWORDS" | tr 'A-Z' 'a-z')
+    local SENT_FILE="$WORK_DIR/sent_nodeseekc.txt"
+
+    # 如果发送记录不存在，创建
+    [[ -f "$SENT_FILE" ]] || touch "$SENT_FILE"
 
     for ch in $TG_CHANNELS; do
         local STATE_FILE="$WORK_DIR/last_${ch}.txt"
 
         echo -e "${CYAN}自动推送频道：${ch}${PLAIN}"
 
-        # 是否有关键词
         if [[ -z "$KEYWORDS" ]]; then
             echo "❌ 未设置关键词，跳过 [$ch]"
-            echo "$(date '+%Y-%m-%d %H:%M:%S') ⚠️ [$ch] 无关键词，跳过自动推送" >> "$LOG_FILE"
+            echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] ⚠️无关键词，跳过自动推送" >> "$LOG_FILE"
             continue
         fi
 
-        # 是否有缓存
         if [[ ! -s "$STATE_FILE" ]]; then
             echo "❌ 无缓存文件，跳过 [$ch]"
-            echo "$(date '+%Y-%m-%d %H:%M:%S') ⚠️ [$ch] 无缓存文件" >> "$LOG_FILE"
+            echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] ⚠️无缓存文件" >> "$LOG_FILE"
             continue
         fi
 
-        # 读取最近10条
+        # 读取最近10条消息
         local messages=()
         while IFS= read -r line; do messages+=("$line"); done < "$STATE_FILE"
 
         local total=${#messages[@]}
         local start=$(( total > 10 ? total - 10 : 0 ))
-        local matched_msgs=()
+        local new_matched_msgs=()    # ⬅ 只推送本次新增的消息
+        local log_matched_count=0    # ⬅ 用于 cron 显示匹配条数
 
         # --------------✨ 日志增强输出 ✨---------------
         echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] 当前关键词：$KEYWORDS" >> "$LOG_FILE"
         echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] 最新10条消息匹配情况如下：" >> "$LOG_FILE"
         # -------------------------------------------------
 
-        # 开始匹配
         for ((idx = start; idx < total; idx++)); do
             local msg="${messages[$idx]}"
             local msg_lower=$(echo "$msg" | tr 'A-Z' 'a-z')
@@ -396,7 +397,7 @@ auto_push() {
             local matched=0
             local matched_kw=""
 
-            # 遍历关键词
+            # 匹配关键词（忽略大小写）
             for kw in $KEYWORDS_LOWER; do
                 if [[ "$msg_lower" == *"$kw"* ]]; then
                     matched=1
@@ -405,38 +406,55 @@ auto_push() {
                 fi
             done
 
-            # 打印分析过程（写入日志）
             if [[ $matched -eq 1 ]]; then
-                echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] 匹配 ✔：${msg}    （关键词：$matched_kw）" >> "$LOG_FILE"
-                matched_msgs+=("$msg")
+                ((log_matched_count++))
+
+                # -------- 去重判断 --------
+                if grep -Fxq "$msg" "$SENT_FILE"; then
+                    echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] 已推送过（跳过）：${msg}" >> "$LOG_FILE"
+                else
+                    echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] 匹配 ✔：${msg}（关键词：$matched_kw）" >> "$LOG_FILE"
+                    new_matched_msgs+=("$msg")
+                fi
             else
                 echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] 未匹配 ✖：${msg}" >> "$LOG_FILE"
             fi
         done
 
-        # 无匹配
-        if [[ ${#matched_msgs[@]} -eq 0 ]]; then
+        # -----------------------
+        # 没有用于推送的新消息
+        # -----------------------
+        if [[ ${#new_matched_msgs[@]} -eq 0 ]]; then
             echo "⚠️ [$ch] 本次无关键词匹配"
-            echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] ⚠️无匹配关键词" >> "$LOG_FILE"
+            echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] ⚠️无匹配或均已推送过" >> "$LOG_FILE"
             continue
         fi
 
+        # -----------------------
         # 拼接推送内容
+        # -----------------------
         local push_text=""
         local i=1
-        for msg in "${matched_msgs[@]}"; do
+        for msg in "${new_matched_msgs[@]}"; do
             push_text+="${i}) ${msg}\n\n"
             ((i++))
         done
 
-        # 推送
+        # -----------------------
+        # 执行推送
+        # -----------------------
         pushplus_send "自动关键词推送 [$ch]" "$push_text"
 
-        echo "📨 [$ch] 自动推送成功（${#matched_msgs[@]} 条）"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] 📩 自动推送成功（${#matched_msgs[@]} 条）" >> "$LOG_FILE"
+        # 写入已推送记录
+        for msg in "${new_matched_msgs[@]}"; do
+            echo "$msg" >> "$SENT_FILE"
+        done
 
+        echo "📨 [$ch] 自动推送成功（${#new_matched_msgs[@]} 条）"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] 📩 自动推送成功（${#new_matched_msgs[@]} 条）" >> "$LOG_FILE"
     done
 }
+
 
 # ============================================
 # 测试 PushPlus 推送功能
