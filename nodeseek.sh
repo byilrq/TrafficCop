@@ -459,13 +459,79 @@ test_pushplus_notification() {
 }
 
 # ============================================
+# 日志轮转：每天清理一次日志，只保留最近 7 天
+# ============================================
+log_rotate() {
+    local log_dir="$WORK_DIR"
+    local log_file="$CRON_LOG"
+
+    # 标记文件，用来判断是否已经执行过
+    local flag_file="$log_dir/log_clean.flag"
+
+    local today=$(date +%Y-%m-%d)
+
+    # 如果 flag 文件中的日期与今天一样，则不重复执行
+    if [[ -f "$flag_file" && "$(cat "$flag_file")" == "$today" ]]; then
+        return
+    fi
+
+    echo "🔥 开始日志轮转：删除 7 天前的日志文件..." >> "$CRON_LOG"
+
+    # 删除 7 天以前的 *.log.* 归档日志
+    find "$log_dir" -name "*.log.*" -mtime +7 -delete
+
+    # 压缩当前日志为归档文件
+    if [[ -f "$log_file" ]]; then
+        mv "$log_file" "${log_file}.${today}"
+        touch "$log_file"
+    fi
+
+    # 更新标记文件
+    echo "$today" > "$flag_file"
+
+    echo "✔ 日志轮转完成" >> "$CRON_LOG"
+}
+# ============================================
 # 定时运行（cron模式）
-# 每30秒执行一次 manual_fresh() + auto_push()
+# 每30秒执行一次 manual_fresh + auto_push
+# 自动限制日志文件最多 100 行（cron.log / sent.txt / nodeseek.log）
 # ============================================
 if [[ "$1" == "-cron" ]]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') 🚀 定时任务已启动（每30秒执行一次 manual_fresh + auto_push）" >> "$CRON_LOG"
 
     while true; do
+
+        # ============================
+        # 限制文件最多 100 行（通用函数）
+        # ============================
+        trim_file() {
+            local file="$1"
+            local max_lines=100
+
+            if [[ -f "$file" ]]; then
+                local cnt
+                cnt=$(wc -l < "$file")
+
+                if (( cnt > max_lines )); then
+                    tail -n "$max_lines" "$file" > "${file}.tmp"
+                    mv "${file}.tmp" "$file"
+                fi
+            fi
+        }
+
+        # 1. 限制 cron 日志
+        trim_file "$CRON_LOG"
+
+        # 2. 限制已推送记录
+        trim_file "$WORK_DIR/sent_nodeseekc.txt"
+
+        # 3. 限制运行日志 nodeseek.log
+        trim_file "$WORK_DIR/nodeseek.log"
+
+
+        # ============================
+        # 正常执行任务
+        # ============================
         {
             echo "--------------------------------------" >> "$CRON_LOG"
             echo "$(date '+%Y-%m-%d %H:%M:%S') ▶️ 执行 manual_fresh()" >> "$CRON_LOG"
@@ -479,12 +545,14 @@ if [[ "$1" == "-cron" ]]; then
             echo "$(date '+%Y-%m-%d %H:%M:%S') 🕒 等待30秒进入下次周期..." >> "$CRON_LOG"
             echo "" >> "$CRON_LOG"
         } &
+
         wait
         sleep 30
     done
 
     exit 0
 fi
+
 
 
 
