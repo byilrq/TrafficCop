@@ -608,24 +608,13 @@ setup_cron() {
 # 关闭定时任务
 # ============================================
 stop_cron() {
-    # 终止进程
-    pkill -f "nodeseek" 2>/dev/null
-    pkill -f "nodeseekc" 2>/dev/null
+    pkill -f nodeseek 2>/dev/null
     sleep 1
-    
-    # 清理用户 crontab
-    crontab -l | grep -v 'nodeseek' | crontab -
-    
-    # 清理系统级 crontab
+    [ -f /var/spool/cron/crontabs/root ] && sed -i '/nodeseek/d' /var/spool/cron/crontabs/root && chmod 600 /var/spool/cron/crontabs/root 2>/dev/null
+    [ -f /var/spool/cron/root ] && sed -i '/nodeseek/d' /var/spool/cron/root
     [ -f /etc/crontab ] && sed -i '/nodeseek/d' /etc/crontab
-    
-    # 删除 cron.d 文件
     rm -f /etc/cron.d/*nodeseek* 2>/dev/null
-    
-    # 重启 cron
     systemctl restart cron 2>/dev/null || systemctl restart crond 2>/dev/null
-    
-    echo "✔ nodeseek 任务与进程已移除"
 }
 
 # ============================================
