@@ -609,11 +609,9 @@ setup_cron() {
 # 关闭定时任务
 # ============================================
 stop_cron() {
-    pkill -f nodeseek 2>/dev/null
-    sleep 1
-    #添加强力手动可执行的命令
-    sed -i '/nodeseek/d' /var/spool/cron/root
-    systemctl restart cron || systemctl restart crond    
+    pkill -f nodeseek
+    crontab -l 2>/dev/null | grep -v 'nodeseek' | crontab -
+    systemctl restart cron || service cron restart
 }
 
 # ============================================
