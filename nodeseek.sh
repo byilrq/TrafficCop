@@ -608,67 +608,24 @@ setup_cron() {
 # 关闭定时任务
 # ============================================
 stop_cron() {
-    echo "🛑 正在停止 nodeseek 定时任务与后台进程..."
-
-    # ============================
-    # 1. 停止所有后台进程
-    # ============================
-    echo "👉 正在终止 nodeseek -cron 进程..."
-    pkill -f "nodeseek.sh -cron" 2>/dev/null
-    pkill -f "nodeseekc.sh -cron" 2>/dev/null
-
-    echo "👉 正在终止所有 nodeseek 相关进程..."
+    # 终止进程
     pkill -f "nodeseek" 2>/dev/null
     pkill -f "nodeseekc" 2>/dev/null
     sleep 1
-
-
-    # ============================
-    # 2. 删除 root 用户 crontab
-    # ============================
-
-    echo "👉 检查并删除 root 用户 crontab 中的 nodeseek 任务..."
-
-    # Debian / Ubuntu（正确路径）
-    if [[ -f /var/spool/cron/crontabs/root ]]; then
-        sed -i '/nodeseek/d' /var/spool/cron/crontabs/root
-        chmod 600 /var/spool/cron/crontabs/root  # 避免权限警告
-        echo "✔ 已清理 /var/spool/cron/crontabs/root"
-    fi
-
-    # CentOS / Rocky / AlmaLinux（RHEL 系）
-    if [[ -f /var/spool/cron/root ]]; then
-        sed -i '/nodeseek/d' /var/spool/cron/root
-        echo "✔ 已清理 /var/spool/cron/root"
-    fi
-
-
-    # ============================
-    # 3. 删除系统级 crontab
-    # ============================
-    if [[ -f /etc/crontab ]]; then
-        sed -i '/nodeseek/d' /etc/crontab
-        echo "✔ 已清理 /etc/crontab"
-    fi
-
-
-    # ============================
-    # 4. 删除 cron.d 中的 nodeseek 文件
-    # ============================
+    
+    # 清理用户 crontab
+    crontab -l | grep -v 'nodeseek' | crontab -
+    
+    # 清理系统级 crontab
+    [ -f /etc/crontab ] && sed -i '/nodeseek/d' /etc/crontab
+    
+    # 删除 cron.d 文件
     rm -f /etc/cron.d/*nodeseek* 2>/dev/null
-    rm -f /etc/cron.d/*nodeseekc* 2>/dev/null
-    echo "✔ 已清理 /etc/cron.d/*nodeseek*"
-
-
-    # ============================
-    # 5. 重启 cron 服务
-    # ============================
-    echo "👉 正在重启 cron 服务..."
+    
+    # 重启 cron
     systemctl restart cron 2>/dev/null || systemctl restart crond 2>/dev/null
-    echo "✔ cron 服务已重启"
-
-
-    echo "🟢 stop_cron() 完成 —— 所有 nodeseek 定时任务与进程已彻底移除"
+    
+    echo "✔ nodeseek 任务与进程已移除"
 }
 
 # ============================================
