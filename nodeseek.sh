@@ -462,7 +462,7 @@ auto_push() {
 # ============================================
 # 测试 PushPlus 推送功能
 # ============================================
-test_pushplus_notification() {
+test_notification() {
     read_config || return
     echo -e "${CYAN}正在发送测试推送...${PLAIN}"
     local now_time=$(date '+%Y-%m-%d %H:%M:%S')
@@ -656,7 +656,7 @@ main_menu() {
             1) initial_config; echo -e "${GREEN}操作完成。${PLAIN}" ;;
             2) print_latest; echo -e "${GREEN}操作完成。${PLAIN}" ;;
             3) manual_push; echo -e "${GREEN}操作完成。${PLAIN}" ;;
-            4) get_latest_message; echo -e "${GREEN}操作完成。${PLAIN}" ;;
+            4) test_notification; echo -e "${GREEN}操作完成。${PLAIN}" ;;
             5) manual_fresh; echo -e "${GREEN} 手动更新完成。${PLAIN}" ;;
             6) stop_cron; echo -e "${GREEN} 停止cron任务完成。${PLAIN}" ;;
             0) exit 0 ;;
