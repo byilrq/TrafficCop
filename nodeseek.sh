@@ -25,31 +25,37 @@ read_config() {
 
     source "$CONFIG_FILE"
 
-    # 基础校验
+    # 监控频道必填
     if [[ -z "$TG_CHANNELS" ]]; then
         echo -e "${RED}❌ 未设置监控频道，请重新配置。${PLAIN}"
         return 1
     fi
 
-    # 推送方式校验
+    # 推送方式必填
     if [[ "$PUSH_METHOD" != "pushplus" && "$PUSH_METHOD" != "telegram" ]]; then
         echo -e "${RED}❌ 推送方式未正确设置，请重新配置。${PLAIN}"
         return 1
     fi
 
-    # 推送方式对应参数校验
-    if [[ "$PUSH_METHOD" == "pushplus" && -z "$PUSHPLUS_TOKEN" ]]; then
-        echo -e "${RED}❌ PushPlus Token 未设置，请重新配置。${PLAIN}"
-        return 1
+    # PushPlus 参数校验
+    if [[ "$PUSH_METHOD" == "pushplus" ]]; then
+        if [[ -z "$PUSHPLUS_TOKEN" ]]; then
+            echo -e "${RED}❌ PushPlus Token 未设置，请重新配置。${PLAIN}"
+            return 1
+        fi
     fi
 
-    if [[ "$PUSH_METHOD" == "telegram" && ( -z "$TG_BOT_TOKEN" || -z "$TG_CHAT_ID" ) ]]; then
-        echo -e "${RED}❌ Telegram 参数未设置，请重新配置。${PLAIN}"
-        return 1
+    # Telegram 参数校验
+    if [[ "$PUSH_METHOD" == "telegram" ]]; then
+        if [[ -z "$TG_BOT_TOKEN" || -z "$TG_CHAT_ID" ]]; then
+            echo -e "${RED}❌ Telegram Bot 参数未设置（TG_BOT_TOKEN / TG_CHAT_ID），请重新配置。${PLAIN}"
+            return 1
+        fi
     fi
 
     return 0
 }
+
 
 write_config() {
     cat > "$CONFIG_FILE" <<EOF
@@ -60,6 +66,10 @@ TG_CHAT_ID="$TG_CHAT_ID"
 TG_CHANNELS="$TG_CHANNELS"
 KEYWORDS="$KEYWORDS"
 EOF
+
+    echo -e "${GREEN}✅ 配置已保存到 $CONFIG_FILE${PLAIN}"
+}
+
 
     echo -e "${GREEN}✅ 配置已保存到 $CONFIG_FILE${PLAIN}"
 }
@@ -234,13 +244,26 @@ pushplus_send() {
 # ============================================
 telegram_send() {
     local text="$1"
-    local url="https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage"
 
-    curl -s -X POST "$url" \
+    # 无 TG 参数 → 直接错误
+    if [[ -z "$TG_BOT_TOKEN" || -z "$TG_CHAT_ID" ]]; then
+        echo "❌ Telegram 参数缺失，无法推送"
+        return 1
+    fi
+
+    local resp=$(curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
         -d chat_id="${TG_CHAT_ID}" \
-        --data-urlencode text="$text" \
-        -d parse_mode="Markdown"
+        --data-urlencode "text=${text}" \
+        -d parse_mode="Markdown")
+
+    if echo "$resp" | grep -q '"ok":true'; then
+        return 0
+    else
+        echo "❌ Telegram 推送失败：$resp"
+        return 1
+    fi
 }
+
 # ============================================
 # 提取标题函数
 # ============================================
@@ -538,35 +561,12 @@ auto_push() {
         # -----------------------
         # 根据配置选择推送方式：PushPlus 或 Telegram
         # -----------------------
-        if [[ "${PUSH_METHOD:-pushplus}" == "telegram" ]]; then
-            # Telegram 推送
-            if [[ -z "$TG_BOT_TOKEN" || -z "$TG_CHAT_ID" ]]; then
-                echo "❌ Telegram 参数未配置（TG_BOT_TOKEN 或 TG_CHAT_ID 为空），跳过推送。"
-                echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] ❌ Telegram 参数未配置，自动推送失败" >> "$LOG_FILE"
-            else
-                # 使用 curl 发送（使用 data-urlencode 避免特殊字符问题）
-                local tg_resp
-                tg_resp=$(curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
-                    -d chat_id="${TG_CHAT_ID}" \
-                    --data-urlencode "text=${push_text}" \
-                    -d parse_mode="Markdown")
+if [[ "$PUSH_METHOD" == "telegram" ]]; then
+    telegram_send "$push_text"
+else
+    pushplus_send "Node" "$push_text"
+fi
 
-                if echo "$tg_resp" | grep -q '"ok":true'; then
-                    echo "📨 [$ch] Telegram 自动推送成功（${#new_matched_msgs[@]} 条）"
-                    echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] 📩 Telegram 自动推送成功（${#new_matched_msgs[@]} 条）" >> "$LOG_FILE"
-                else
-                    echo "❌ [$ch] Telegram 推送失败，响应：$tg_resp"
-                    echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] ❌ Telegram 推送失败：$tg_resp" >> "$LOG_FILE"
-                fi
-            fi
-        else
-            # 默认使用 PushPlus（保持原行为）
-            pushplus_send "Node" "$push_text"
-            echo "📨 [$ch] 自动推送成功（${#new_matched_msgs[@]} 条）"
-            echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] 📩 自动推送成功（${#new_matched_msgs[@]} 条）" >> "$LOG_FILE"
-        fi
-
-        # 写入已推送记录（无论哪种推送成功与否，这里继续写入以避免重复判定；
         # 如果你希望仅在推送成功时写入，可以把写入逻辑放到上面成功分支中）
         for msg in "${new_matched_msgs[@]}"; do
             echo "$msg" >> "$SENT_FILE"
@@ -574,8 +574,6 @@ auto_push() {
 
     done
 }
-
-
 
 # ============================================
 # 测试 PushPlus 推送功能
