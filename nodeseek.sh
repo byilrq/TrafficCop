@@ -389,79 +389,60 @@ manual_fresh() {
 manual_push() {
     read_config || return
 
-    local KEYWORDS_LOWER=$(echo "$KEYWORDS" | tr 'A-Z' 'a-z')
-
     for ch in $TG_CHANNELS; do
         local STATE_FILE="$WORK_DIR/last_${ch}.txt"
         echo -e "${CYAN}频道：$ch${PLAIN}"
-
-        if [[ -z "$KEYWORDS" ]]; then
-            echo "❌ 未设置关键词，跳过 [$ch]"
-            continue
-        fi
 
         if [[ ! -s "$STATE_FILE" ]]; then
             echo "❌ 无缓存文件，跳过 [$ch]"
             continue
         fi
 
-        # 读取缓存
+        # 读取全部消息（通常是10条）
         local messages=()
-        while IFS= read -r line; do messages+=("$line"); done < "$STATE_FILE"
+        while IFS= read -r line; do
+            messages+=("$line")
+        done < "$STATE_FILE"
 
-        local total=${#messages[@]}
-        local start=$(( total > 10 ? total - 10 : 0 ))
-        local matched_msgs=()
-
-        echo "当前关键词：$KEYWORDS"
-        echo "最新10条消息标题匹配情况如下："
-
-        # 匹配逻辑
-        for ((idx=start; idx<total; idx++)); do
-            local msg="${messages[$idx]}"
-            local msg_lower=$(echo "$msg" | tr 'A-Z' 'a-z')
-
-            local matched=0
-            local matched_kw=""
-
-            for kw in $KEYWORDS_LOWER; do
-                if [[ "$msg_lower" == *"$kw"* ]]; then
-                    matched=1
-                    matched_kw="$kw"
-                    break
-                fi
-            done
-
-            if [[ $matched -eq 1 ]]; then
-                matched_msgs+=("$msg")
-                echo "${idx}) ${msg}  --匹配：${matched_kw}"
-            else
-                echo "${idx}) ${msg}  --不匹配"
-            fi
-        done
-
-        echo ""
-
-        if [[ ${#matched_msgs[@]} -eq 0 ]]; then
-            echo "⚠️ 无匹配关键词消息"
+        if [[ ${#messages[@]} -eq 0 ]]; then
+            echo "⚠️ 缓存为空，无可推送内容"
             continue
         fi
 
-        # 推送
+        echo "➡️ 将推送以下 ${#messages[@]} 条消息："
+        local idx=1
+        for msg in "${messages[@]}"; do
+            echo "${idx}) $msg"
+            ((idx++))
+        done
+        echo ""
+
+        # 拼接推送内容
         local push_text=""
         local i=1
-        for msg in "${matched_msgs[@]}"; do
+        for msg in "${messages[@]}"; do
             push_text+="${i}) ${msg}\n\n"
             ((i++))
         done
 
-        pushplus_send "关键词匹配推送 [$ch]" "$push_text"
-        echo "✅ 推送完成（匹配 ${#matched_msgs[@]} 条）"
+        # ===================================
+        # 自动选择推送方式（PushPlus / Telegram）
+        # ===================================
+        if [[ "$PUSH_METHOD" == "telegram" ]]; then
+            echo "📤 使用 Telegram 推送..."
+            telegram_send "$push_text"
+        else
+            echo "📤 使用 PushPlus 推送..."
+            pushplus_send "最新消息推送 [$ch]" "$push_text"
+        fi
+
+        echo "✅ 推送完成（共 ${#messages[@]} 条）"
     done
 }
 # ============================================
 # 自动推送（用于 cron）—— 匹配关键词且只推送一次
 # ============================================
+
 auto_push() {
     read_config || return
 
@@ -573,24 +554,56 @@ fi
 # ============================================
 # 测试 PushPlus 推送功能
 # ============================================
-test_pushplus_notification() {
+test_notification() {
     read_config || return
     echo -e "${CYAN}正在发送测试推送...${PLAIN}"
+
     local now_time=$(date '+%Y-%m-%d %H:%M:%S')
     local test_title="🔔 [监控测试消息]"
-    local test_content="🕒 时间：${now_time}<br>📢 频道：${TG_CHANNELS:-未设置}<br><br>这是来自 TG频道监控脚本的测试消息。<br>如果您看到此推送，说明 PushPlus 配置正常 ✅"
+    local test_content="🕒 时间：${now_time}<br>📢 频道：${TG_CHANNELS:-未设置}<br><br>这是来自 TG频道监控脚本的测试消息。<br>如果您看到此推送，说明推送配置正常 ✅"
+
+    # =====================================
+    # 自动判断推送方式（PushPlus / Telegram）
+    # =====================================
+    if [[ "$PUSH_METHOD" == "telegram" ]]; then
+        echo "📤 使用 Telegram 推送测试消息..."
+
+        # Telegram 测试内容（纯文本）
+        local tg_text="🔔 监控测试消息\n\n时间：${now_time}\n频道：${TG_CHANNELS}\n\n如果你看到此消息，说明 Telegram 推送配置正常。"
+
+        local resp=$(telegram_send "$tg_text")
+
+        # Telegram 没有 JSON code，只能判断 sendMessage 是否返回错误
+        if [[ $? -eq 0 ]]; then
+            echo -e "${GREEN}✅ Telegram 测试推送成功！${PLAIN}"
+            echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ Telegram 测试推送成功" >> "$LOG_FILE"
+        else
+            echo -e "${RED}❌ Telegram 推送失败！${PLAIN}"
+            echo "返回信息：$resp"
+            echo "$(date '+%Y-%m-%d %H:%M:%S') ❌ Telegram 测试推送失败：$resp" >> "$LOG_FILE"
+        fi
+        return
+    fi
+
+    # =====================================
+    # PushPlus 推送测试
+    # =====================================
+    echo "📤 使用 PushPlus 推送测试消息..."
+
     local response=$(curl -s -X POST "http://www.pushplus.plus/send" \
         -H "Content-Type: application/json" \
         -d "{\"token\":\"${PUSHPLUS_TOKEN}\",\"title\":\"${test_title}\",\"content\":\"${test_content}\",\"template\":\"markdown\"}")
+
     if echo "$response" | grep -q '"code":200'; then
         echo -e "${GREEN}✅ PushPlus 测试推送成功！${PLAIN}"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ 测试推送成功" >> "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ PushPlus 测试推送成功" >> "$LOG_FILE"
     else
-        echo -e "${RED}❌ 推送失败！${PLAIN}"
+        echo -e "${RED}❌ PushPlus 推送失败！${PLAIN}"
         echo "返回信息：$response"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') ❌ 测试推送失败：$response" >> "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') ❌ PushPlus 测试推送失败：$response" >> "$LOG_FILE"
     fi
 }
+
 
 # ============================================
 # 日志轮转：每天清理一次日志，只保留最近 7 天
@@ -625,6 +638,8 @@ log_rotate() {
 
     echo "✔ 日志轮转完成" >> "$CRON_LOG"
 }
+
+
 # ============================================
 # 定时运行（cron模式）
 # 每30秒执行一次 manual_fresh + auto_push
@@ -764,10 +779,10 @@ main_menu() {
         read -rp "请选择操作 [0-6]: " choice
         echo
         case $choice in
-            1) initial_config; echo -e "${GREEN}操作完成。${PLAIN}" ;;
-            2) print_latest; echo -e "${GREEN}操作完成。${PLAIN}" ;;
-            3) manual_push; echo -e "${GREEN}操作完成。${PLAIN}" ;;
-            4) get_latest_message; echo -e "${GREEN}操作完成。${PLAIN}" ;;
+            1) initial_config; echo -e "${GREEN}安装/修改配置操作完成。${PLAIN}" ;;
+            2) print_latest; echo -e "${GREEN}打印最新消息操作完成。${PLAIN}" ;;
+            3) manual_push; echo -e "${GREEN}推送最新消息操作完成。${PLAIN}" ;;
+            4) test_notification; echo -e "${GREEN}推送测试消息操作完成。${PLAIN}" ;;
             5) manual_fresh; echo -e "${GREEN} 手动更新完成。${PLAIN}" ;;
             6) stop_cron; echo -e "${GREEN} 停止cron任务完成。${PLAIN}" ;;
             0) exit 0 ;;
