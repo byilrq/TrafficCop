@@ -23,30 +23,51 @@ read_config() {
         return 1
     fi
 
-    # 加载配置
     source "$CONFIG_FILE"
 
     # 基础校验
-    if [ -z "$PUSHPLUS_TOKEN" ] || [ -z "$TG_CHANNELS" ]; then
-        echo -e "${RED}❌ 配置不完整，请重新配置。${PLAIN}"
+    if [[ -z "$TG_CHANNELS" ]]; then
+        echo -e "${RED}❌ 未设置监控频道，请重新配置。${PLAIN}"
         return 1
     fi
+
+    # 推送方式校验
+    if [[ "$PUSH_METHOD" != "pushplus" && "$PUSH_METHOD" != "telegram" ]]; then
+        echo -e "${RED}❌ 推送方式未正确设置，请重新配置。${PLAIN}"
+        return 1
+    fi
+
+    # 推送方式对应参数校验
+    if [[ "$PUSH_METHOD" == "pushplus" && -z "$PUSHPLUS_TOKEN" ]]; then
+        echo -e "${RED}❌ PushPlus Token 未设置，请重新配置。${PLAIN}"
+        return 1
+    fi
+
+    if [[ "$PUSH_METHOD" == "telegram" && ( -z "$TG_BOT_TOKEN" || -z "$TG_CHAT_ID" ) ]]; then
+        echo -e "${RED}❌ Telegram 参数未设置，请重新配置。${PLAIN}"
+        return 1
+    fi
+
     return 0
 }
 
 write_config() {
     cat > "$CONFIG_FILE" <<EOF
+PUSH_METHOD="$PUSH_METHOD"
 PUSHPLUS_TOKEN="$PUSHPLUS_TOKEN"
+TG_BOT_TOKEN="$TG_BOT_TOKEN"
+TG_CHAT_ID="$TG_CHAT_ID"
 TG_CHANNELS="$TG_CHANNELS"
 KEYWORDS="$KEYWORDS"
 EOF
+
     echo -e "${GREEN}✅ 配置已保存到 $CONFIG_FILE${PLAIN}"
 }
+
 
 # ============================================
 # 初始化配置（支持保留旧值）
 # ============================================
-
 initial_config() {
     echo -e "${BLUE}======================================${PLAIN}"
     echo -e "${PURPLE} nodeseek 配置向导${PLAIN}"
@@ -60,17 +81,63 @@ initial_config() {
         source "$CONFIG_FILE"
     fi
 
-    # --- PushPlus Token ---
-    if [ -n "$PUSHPLUS_TOKEN" ]; then
-        local token_display="${PUSHPLUS_TOKEN:0:10}...${PUSHPLUS_TOKEN: -4}"
-        read -rp "请输入 PushPlus Token [当前: $token_display]: " new_token
-        [[ -z "$new_token" ]] && new_token="$PUSHPLUS_TOKEN"
-    else
-        read -rp "请输入 PushPlus Token: " new_token
-        while [[ -z "$new_token" ]]; do
-            echo "❌ Token 不能为空，请重新输入。"
+    # --- 选择推送方式（新增） ---
+    echo ""
+    echo "请选择推送方式（按 Enter 保持当前配置）："
+    echo "1) PushPlus"
+    echo "2) Telegram Bot 推送"
+    local cur_method="${PUSH_METHOD:-未设置}"
+    read -rp "输入 1 或 2 [当前: ${cur_method}]: " method_choice
+
+    if [[ -n "$method_choice" ]]; then
+        if [[ "$method_choice" == "1" ]]; then
+            PUSH_METHOD="pushplus"
+        elif [[ "$method_choice" == "2" ]]; then
+            PUSH_METHOD="telegram"
+        else
+            echo "⚠️ 无效选择，保持现有推送方式：${cur_method}"
+        fi
+    fi
+
+    # 如果选择 Telegram，则提示录入 TG_BOT_TOKEN 和 TG_CHAT_ID（可按 Enter 保留旧值）
+    if [[ "$PUSH_METHOD" == "telegram" ]]; then
+        if [ -n "$TG_BOT_TOKEN" ]; then
+            local bot_display="${TG_BOT_TOKEN:0:10}...${TG_BOT_TOKEN: -4}"
+            read -rp "请输入 Telegram Bot Token [当前: $bot_display]: " new_tg_bot
+            [[ -z "$new_tg_bot" ]] && new_tg_bot="$TG_BOT_TOKEN"
+        else
+            read -rp "请输入 Telegram Bot Token: " new_tg_bot
+            while [[ -z "$new_tg_bot" ]]; do
+                echo "❌ Token 不能为空，请重新输入。"
+                read -rp "请输入 Telegram Bot Token: " new_tg_bot
+            done
+        fi
+
+        if [ -n "$TG_CHAT_ID" ]; then
+            read -rp "请输入 Telegram Chat ID [当前: $TG_CHAT_ID]: " new_tg_chat
+            [[ -z "$new_tg_chat" ]] && new_tg_chat="$TG_CHAT_ID"
+        else
+            read -rp "请输入 Telegram Chat ID: " new_tg_chat
+            while [[ -z "$new_tg_chat" ]]; do
+                echo "❌ Chat ID 不能为空，请重新输入。"
+                read -rp "请输入 Telegram Chat ID: " new_tg_chat
+            done
+        fi
+    fi
+
+    # --- PushPlus Token --- （保留原逻辑，仅在用户选择或保持 PushPlus 时使用）
+    if [[ -z "$PUSH_METHOD" || "$PUSH_METHOD" == "pushplus" ]]; then
+        if [ -n "$PUSHPLUS_TOKEN" ]; then
+            local token_display="${PUSHPLUS_TOKEN:0:10}...${PUSHPLUS_TOKEN: -4}"
+            read -rp "请输入 PushPlus Token [当前: $token_display]: " new_token
+            [[ -z "$new_token" ]] && new_token="$PUSHPLUS_TOKEN"
+        else
             read -rp "请输入 PushPlus Token: " new_token
-        done
+            while [[ -z "$new_token" ]]; do
+                echo "❌ Token 不能为空，请重新输入。"
+                read -rp "请输入 PushPlus Token: " new_token
+            done
+        fi
     fi
 
     # --- Telegram Channel(s) ---
@@ -126,8 +193,21 @@ initial_config() {
     fi
 
 
-    # 保存配置
-    PUSHPLUS_TOKEN="$new_token"
+    # 保存配置（尽量保留旧值，只有用户新输入才覆盖）
+    # PushPlus
+    if [[ -n "${new_token:-}" ]]; then
+        PUSHPLUS_TOKEN="$new_token"
+    fi
+
+    # Telegram bot / chat
+    if [[ -n "${new_tg_bot:-}" ]]; then
+        TG_BOT_TOKEN="$new_tg_bot"
+    fi
+    if [[ -n "${new_tg_chat:-}" ]]; then
+        TG_CHAT_ID="$new_tg_chat"
+    fi
+
+    # 频道与关键词
     TG_CHANNELS="$new_channels"
     write_config
 
@@ -136,6 +216,7 @@ initial_config() {
     echo ""
     read_config
 }
+
 
 # ============================================
 # 推送到 PushPlus
@@ -148,7 +229,18 @@ pushplus_send() {
         -d "{\"token\":\"${PUSHPLUS_TOKEN}\",\"title\":\"${title}\",\"content\":\"${content}\",\"template\":\"markdown\"}" \
         >/dev/null
 }
+# ============================================
+# 推送到 Tg
+# ============================================
+telegram_send() {
+    local text="$1"
+    local url="https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage"
 
+    curl -s -X POST "$url" \
+        -d chat_id="${TG_CHAT_ID}" \
+        --data-urlencode text="$text" \
+        -d parse_mode="Markdown"
+}
 # ============================================
 # 提取标题函数
 # ============================================
@@ -444,19 +536,45 @@ auto_push() {
         done
 
         # -----------------------
-        # 执行推送pushplus
+        # 根据配置选择推送方式：PushPlus 或 Telegram
         # -----------------------
-        pushplus_send "Node" "$push_text"
+        if [[ "${PUSH_METHOD:-pushplus}" == "telegram" ]]; then
+            # Telegram 推送
+            if [[ -z "$TG_BOT_TOKEN" || -z "$TG_CHAT_ID" ]]; then
+                echo "❌ Telegram 参数未配置（TG_BOT_TOKEN 或 TG_CHAT_ID 为空），跳过推送。"
+                echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] ❌ Telegram 参数未配置，自动推送失败" >> "$LOG_FILE"
+            else
+                # 使用 curl 发送（使用 data-urlencode 避免特殊字符问题）
+                local tg_resp
+                tg_resp=$(curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+                    -d chat_id="${TG_CHAT_ID}" \
+                    --data-urlencode "text=${push_text}" \
+                    -d parse_mode="Markdown")
 
-        # 写入已推送记录
+                if echo "$tg_resp" | grep -q '"ok":true'; then
+                    echo "📨 [$ch] Telegram 自动推送成功（${#new_matched_msgs[@]} 条）"
+                    echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] 📩 Telegram 自动推送成功（${#new_matched_msgs[@]} 条）" >> "$LOG_FILE"
+                else
+                    echo "❌ [$ch] Telegram 推送失败，响应：$tg_resp"
+                    echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] ❌ Telegram 推送失败：$tg_resp" >> "$LOG_FILE"
+                fi
+            fi
+        else
+            # 默认使用 PushPlus（保持原行为）
+            pushplus_send "Node" "$push_text"
+            echo "📨 [$ch] 自动推送成功（${#new_matched_msgs[@]} 条）"
+            echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] 📩 自动推送成功（${#new_matched_msgs[@]} 条）" >> "$LOG_FILE"
+        fi
+
+        # 写入已推送记录（无论哪种推送成功与否，这里继续写入以避免重复判定；
+        # 如果你希望仅在推送成功时写入，可以把写入逻辑放到上面成功分支中）
         for msg in "${new_matched_msgs[@]}"; do
             echo "$msg" >> "$SENT_FILE"
         done
 
-        echo "📨 [$ch] 自动推送成功（${#new_matched_msgs[@]} 条）"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] 📩 自动推送成功（${#new_matched_msgs[@]} 条）" >> "$LOG_FILE"
     done
 }
+
 
 
 # ============================================
