@@ -3,6 +3,13 @@
 # Telegram Channel → nodeseek监控脚本 v1.0
 # 作者：by / 更新时间：2025-11-10
 # ============================================
+
+# 强制使用 UTF-8 编码，兼容中日英
+export LANG=zh_CN.UTF-8
+export LC_ALL=zh_CN.UTF-8
+export LANGUAGE=zh_CN:en_US
+
+# 配置log路径
 WORK_DIR="/root/TrafficCop"
 mkdir -p "$WORK_DIR"
 CONFIG_FILE="$WORK_DIR/nodeseek_config.txt"
