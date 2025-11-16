@@ -93,7 +93,8 @@ initial_config() {
 
     # --- 启动写入cron 任务设置 ---
     setup_cron;
-    # --- 关键词过滤设置 ---
+
+    # --- 关键词过滤设置 ---（汉字的关键词要直接输入使用，不要在.txt修改否则会乱码）
     echo ""
     echo "当前关键词：${KEYWORDS:-未设置}"
     read -rp "是否需要重置关键词？(Y/N): " reset_kw
