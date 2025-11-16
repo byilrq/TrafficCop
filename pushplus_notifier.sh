@@ -11,7 +11,7 @@ mkdir -p "$WORK_DIR"
 CONFIG_FILE="$WORK_DIR/pushplus_notifier_config.txt"
 LOG_FILE="$WORK_DIR/traffic_monitor.log"
 SCRIPT_PATH="$WORK_DIR/pushplus_notifier.sh"
-CRON_LOG="$WORK_DIR/pushplus_notifier_cron.log"
+CRON_LOG="$WORK_DIR/pushplus_cron.log"
 LAST_NOTIFICATION_FILE="$WORK_DIR/last_notification_status.txt"
 
 # ================== 彩色定义 ==================
