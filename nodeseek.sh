@@ -4,10 +4,9 @@
 # 作者：by / 更新时间：2025-11-10
 # ============================================
 
-# 强制使用 UTF-8 编码，兼容中日英
-export LANG=zh_CN.UTF-8
-export LC_ALL=zh_CN.UTF-8
-export LANGUAGE=zh_CN:en_US
+# 强制使用万能 UTF-8 locale（几乎所有 Linux 发行版都原生支持，无需生成）
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
 
 # 配置log路径
 WORK_DIR="/root/TrafficCop"
@@ -463,6 +462,8 @@ auto_push() {
         echo "📨 [$ch] 自动推送成功（${#new_matched_msgs[@]} 条）"
         echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] 📩 自动推送成功（${#new_matched_msgs[@]} 条）" >> "$LOG_FILE"
     done
+
+    printf "[调试] 当前实际 locale: LANG=%s LC_ALL=%s LC_CTYPE=%s charmap=%s\n" "$LANG" "$LC_ALL" "$$ LC_CTYPE" " $$(locale charmap 2>/dev/null)" >> "$LOG_FILE"
 }
 
 
