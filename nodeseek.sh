@@ -463,8 +463,6 @@ auto_push() {
         echo "📨 [$ch] 自动推送成功（${#new_matched_msgs[@]} 条）"
         echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] 📩 自动推送成功（${#new_matched_msgs[@]} 条）" >> "$LOG_FILE"
     done
-
-    printf "[调试] 当前实际 locale: LANG=%s LC_ALL=%s LC_CTYPE=%s charmap=%s\n" "$LANG" "$LC_ALL" "$$ LC_CTYPE" " $$(locale charmap 2>/dev/null)" >> "$LOG_FILE"
 }
 
 
