@@ -210,88 +210,143 @@ test_pushplus_notification() {
 # ============================================
 # 每日报告
 # ============================================
+# ============================================
+# 每日报告（已完全兼容 v1.0.85 流量监控脚本）
+# ============================================
 daily_report() {
-    local raw_output
-    raw_output=$(get_current_traffic)
+    local MONITOR_SCRIPT="$WORK_DIR/traffic_monitor.sh"
 
-    local datetime=$(echo "$raw_output" | grep -m1 "当前周期" | cut -d' ' -f1)
-    local period=$(echo "$raw_output" | grep "当前周期" | sed 's/.*当前周期: //')
-    local usage=$(echo "$raw_output" | grep "当前流量使用" | sed 's/.*当前流量使用: //;s/ GB//')
-
-    [ -z "$datetime" ] && datetime=$(date '+%Y-%m-%d %H:%M:%S')
-    [ -z "$period" ] && period="未知"
-    [ -z "$usage" ] && usage="未知"
-
-    local TLIMIT TTOL limit
-    source "$WORK_DIR/trafficcop.sh" >/dev/null 2>&1
-    read_config >/dev/null 2>&1
-    TLIMIT="$TRAFFIC_LIMIT"; TTOL="$TRAFFIC_TOLERANCE"
-
-    if [[ -n "$TLIMIT" && -n "$TTOL" ]]; then
-        limit=$(echo "$TLIMIT - $TTOL" | bc 2>/dev/null || echo "未知")
-        limit="${limit} GB"
-    else
-        limit="未知"
+    # 检查主脚本是否存在
+    if [ ! -f "$MONITOR_SCRIPT" ]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') : ❌ 流量监控脚本缺失，无法生成每日报告" | tee -a "$CRON_LOG"
+        return 1
     fi
 
-# === 计算到期剩余天数（增强版） ===
-local today=$(date '+%Y-%m-%d')
-local expire_formatted=$(echo "$EXPIRE_DATE" | tr '.' '-')
-local expire_ts=$(date -d "${expire_formatted} 00:00:00" +%s 2>/dev/null)
-local today_ts=$(date -d "${today} 00:00:00" +%s 2>/dev/null)
-local diff_days diff_emoji
+    # 加载流量监控脚本中的所有函数和配置（不执行 main）
+    source "$MONITOR_SCRIPT" >/dev/null 2>&1
 
-if [[ -z "$expire_ts" || -z "$today_ts" ]]; then
-    diff_days="未知"
-    diff_emoji="⚫"
-else
-    diff_days=$(( (expire_ts - today_ts) / 86400 ))
-    if (( diff_days < 0 )); then
+    # 读取流量监控配置（必须）
+    if [ ! -f "$WORK_DIR/traffic_monitor_config.txt" ]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') : ❌ 流量监控配置文件缺失" | tee -a "$CRON_LOG"
+        return 1
+    fi
+    source "$WORK_DIR/traffic_monitor_config.txt"
+
+    # 获取实时流量数据（已自动减去偏移量，从 0 开始）
+    local current_usage=$(get_traffic_usage 2>/dev/null || echo "0.000")
+    local period_start=$(get_period_start_date 2>/dev/null || echo "未知")
+    local traffic_mode_zh
+    case "$TRAFFIC_MODE" in
+        out)   traffic_mode_zh="仅出站" ;;
+        in)    traffic_mode_zh="仅进站" ;;
+        total) traffic_mode_zh="出+进总和" ;;
+        max)   traffic_mode_zh="出/进较大者" ;;
+        *)     traffic_mode_zh="未知" ;;
+    esac
+
+    # 计算阈值
+    local threshold="未知"
+    if [[ -n "$TRAFFIC_LIMIT" && -n "$TRAFFIC_TOLERANCE" ]]; then
+        threshold=$(echo "$TRAFFIC_LIMIT - $TRAFFIC_TOLERANCE" | bc 2>/dev/null || echo "未知")
+        threshold="${threshold} GB"
+    fi
+
+    # 计算 VPS 到期剩余天数（保持您原有增强逻辑）
+    local today=$(date '+%Y-%m-%d')
+    local expire_formatted=$(echo "$EXPIRE_DATE" | tr '.' '-')
+    local expire_ts=$(date -d "${expire_formatted} 00:00:00" +%s 2>/dev/null)
+    local today_ts=$(date -d "${today} 00:00:00" +%s 2>/dev/null)
+    local diff_days diff_emoji="🟢"
+    if [[ -z "$expire_ts" || -z "$today_ts" ]]; then
+        diff_days="未知"
         diff_emoji="⚫"
-        diff_days="$((-diff_days))天前（已过期）"
-    elif (( diff_days <= 30 )); then
-        diff_emoji="🔴"
-        diff_days="${diff_days}天（即将到期，请尽快续费）"
-    elif (( diff_days <= 60 )); then
-        diff_emoji="🟡"
-        diff_days="${diff_days}天（注意续费）"
     else
-        diff_emoji="🟢"
-        diff_days="${diff_days}天"
+        diff_days=$(( (expire_ts - today_ts) / 86400 ))
+        if (( diff_days < 0 )); then
+            diff_emoji="⚫"
+            diff_days="$((-diff_days))天前（已过期）"
+        elif (( diff_days <= 30 )); then
+            diff_emoji="🔴"
+            diff_days="${diff_days}天（即将到期，请尽快续费）"
+        elif (( diff_days <= 60 )); then
+            diff_emoji="🟡"
+            diff_days="${diff_days}天（注意续费）"
+        else
+            diff_emoji="🟢"
+            diff_days="${diff_days}天"
+        fi
     fi
-fi
 
+    # 拼接推送内容
+    local title="🖥️ [${MACHINE_NAME}] 每日流量报告"
+    local content=""
+    content+="<font color='#4169E1'>🕒 日期：</font> $(date '+%Y-%m-%d %H:%M')<br>"
+    content+="<font color='#DC143C'>${diff_emoji} VPS剩余：</font> ${diff_days}<br><br>"
+    content+="<font color='#32CD32'>📅 本期起始：</font> ${period_start}<br>"
+    content+="<font color='#32CD32'>🔄 统计模式：</font> ${traffic_mode_zh}<br>"
+    content+="<font color='#FF8C00'>📊 本期已用：</font> <font size='5'><b>${current_usage} GB</b></font><br>"
+    content+="<font color='#9932CC'>🌐 流量套餐：</font> ${threshold}<br>"
+    content+="<font color='#696969'>🖧 接口：</font> ${MAIN_INTERFACE}<br>"
+    content+="<font color='#696969'>⚙️ 限制方式：</font> ${LIMIT_MODE:-未知}"
 
-
-    # === 拼接消息 ===
-    local title="🖥️ [${MACHINE_NAME}] 每日报告"
-    content+="🕒日期：$(date '+%Y-%m-%d')<br>"
-    content+="${diff_emoji}剩余：${diff_days}<br>"
-    content+="📅周期：${period}<br>"
-    content+="⌛已用：${usage} GB<br>"
-    content+="🌐套餐：${limit}"
-
-    pushplus_send "$title" "$content"
+    # 发送推送
+    if pushplus_send "$title" "$content"; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') : ✅ 每日报告推送成功（已用 ${current_usage} GB）" | tee -a "$CRON_LOG"
+    else
+        echo "$(date '+%Y-%m-%d %H:%M:%S') : ❌ 每日报告推送失败" | tee -a "$CRON_LOG"
+    fi
 }
 
 # ============================================
 # 获取当前流量信息
 # ============================================
 get_current_traffic() {
-    if [ -f "$WORK_DIR/trafficcop.sh" ]; then
-        source "$WORK_DIR/trafficcop.sh" >/dev/null 2>&1
-    else
-        echo "trafficcop.sh 不存在"
+    local MONITOR_SCRIPT="$WORK_DIR/traffic_monitor.sh"   # ← 改为正确的文件名
+
+    if [ ! -f "$MONITOR_SCRIPT" ]; then
+        echo "错误：流量监控脚本不存在！路径: $MONITOR_SCRIPT"
+        echo "请确认 /root/TrafficCop/traffic_monitor.sh 文件存在且可执行"
         return 1
     fi
-    local current_usage=$(get_traffic_usage)
-    local start_date=$(get_period_start_date)
-    local end_date=$(get_period_end_date)
-    local mode=$TRAFFIC_MODE
 
-    echo "$(date '+%Y-%m-%d %H:%M:%S') 当前周期: $start_date 到 $end_date"
-    echo "$(date '+%Y-%m-%d %H:%M:%S') 统计模式: $mode"
-    echo "$(date '+%Y-%m-%d %H:%M:%S') 当前流量使用: $current_usage GB"
+    # 加载流量监控脚本中的函数（不执行 main）
+    source "$MONITOR_SCRIPT" >/dev/null 2>&1
+
+    # 必须先加载配置，否则函数无法运行
+    if ! read_config_from_monitor() ; then
+        echo "错误：无法读取流量监控配置，请先运行一次 traffic_monitor.sh 完成初始化"
+        return 1
+    fi
+
+    local current_usage=$(get_traffic_usage 2>/dev/null || echo "0.000")
+    local start_date=$(get_period_start_date 2>/dev/null || echo "未知")
+    local mode=$(echo "$TRAFFIC_MODE" | tr '[:lower:]' '[:upper:]' || echo "未知")
+
+    echo "======================================="
+    echo "          实时流量信息"
+    echo "======================================="
+    echo "机器名称     : $MACHINE_NAME"
+    echo "统计接口     : $MAIN_INTERFACE"
+    echo "统计模式     : $mode"
+    echo "当前周期     : $start_date 起"
+    echo "本周期已用   : $current_usage GB"
+    echo "流量限制     : $TRAFFIC_LIMIT GB"
+    echo "容错范围     : $TRAFFIC_TOLERANCE GB"
+    echo "阈值         : $(echo "$TRAFFIC_LIMIT - $TRAFFIC_TOLERANCE" | bc 2>/dev/null || echo "未知") GB"
+    echo "限制方式     : $LIMIT_MODE"
+    echo "======================================="
+}
+
+# 新增辅助函数：从主脚本读取配置（因为原 read_config 是推送专用的）
+read_config_from_monitor() {
+    local config_file="$WORK_DIR/traffic_monitor_config.txt"
+    if [ -f "$config_file" ]; then
+        source "$config_file"
+        return 0
+    else
+        echo "错误：流量监控配置文件不存在: $config_file"
+        return 1
+    fi
 }
 
 pushplus_stop() {
