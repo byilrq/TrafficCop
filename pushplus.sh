@@ -301,24 +301,37 @@ initial_config() {
 # 每日报告
 # ============================================
 daily_report() {
+    # 先读 TrafficCop 配置
     if ! read_traffic_config; then
         echo "$(date '+%Y-%m-%d %H:%M:%S') : ❌ 无法读取 TrafficCop 配置，放弃发送每日报告。" | tee -a "$CRON_LOG"
         return 1
     fi
 
-    local usage period limit today expire_formatted expire_ts today_ts diff_days diff_emoji
+    local current_usage period_start period_end limit
+    local today expire_formatted expire_ts today_ts diff_days diff_emoji
 
-    usage=$(get_traffic_usage 2>/dev/null || echo "0.000")
-    period=$(get_period_start_date 2>/dev/null || echo "未知")
+    # 本期已用流量（已经减去 offset）
+    current_usage=$(get_traffic_usage 2>/dev/null || echo "0.000")
 
-    # 计算阈值 = 流量限制 - 容错
+    # 周期开始时间（跟 trafficcop 逻辑一致）
+    period_start=$(get_period_start_date 2>/dev/null || echo "未知")
+
+    # 周期结束时间：就用当天日期
+    period_end=$(date '+%Y-%m-%d')
+
+    # 流量套餐 = TRAFFIC_LIMIT - TRAFFIC_TOLERANCE
     if [[ -n "$TRAFFIC_LIMIT" && -n "$TRAFFIC_TOLERANCE" ]]; then
-        limit=$(echo "$TRAFFIC_LIMIT - $TRAFFIC_TOLERANCE" | bc 2>/dev/null || echo "未知")
+        limit=$(echo "$TRAFFIC_LIMIT - $TRAFFIC_TOLERANCE" | bc 2>/dev/null || echo "")
+        if [[ -n "$limit" ]]; then
+            limit="${limit} GB"
+        else
+            limit="未知"
+        fi
     else
         limit="未知"
     fi
 
-    # VPS 剩余天数
+    # === VPS 剩余天数，仅显示「xxx天」，不加额外文案 ===
     today=$(date '+%Y-%m-%d')
     expire_formatted=$(echo "$EXPIRE_DATE" | tr '.' '-')
     expire_ts=$(date -d "${expire_formatted} 00:00:00" +%s 2>/dev/null)
@@ -332,7 +345,7 @@ daily_report() {
         diff_days=$(( (expire_ts - today_ts) / 86400 ))
         if (( diff_days < 0 )); then
             diff_emoji="⚫"
-            diff_days="$((-diff_days))天前（已过期）"
+            diff_days="$((-diff_days))天前"
         elif (( diff_days <= 30 )); then
             diff_emoji="🔴"
             diff_days="${diff_days}天"
@@ -340,11 +353,12 @@ daily_report() {
             diff_emoji="🟡"
             diff_days="${diff_days}天"
         else
+            diff_emoji="🟢"
             diff_days="${diff_days}天"
         fi
     fi
 
-    # === 构建美化消息（严格按你给的格式，不新增） ===
+    # ===== 按你指定的 5 行格式拼接内容 =====
     local title content
     title="🖥️ [${MACHINE_NAME}] 每日报告"
 
@@ -353,14 +367,16 @@ daily_report() {
     content+="${diff_emoji}剩余：${diff_days}\n"
     content+="📅周期：${period_start} 到 ${period_end}\n"
     content+="⌛已用：${current_usage} GB\n"
-    content+="🌐套餐：${package_limit}"
-    # 推送
-    if pushplus_send "流量报告" "$message"; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : ✅ 每日报告推送成功" | tee -a "$CRON_LOG"
+    content+="🌐套餐：${limit}"
+
+    # 真正发送 title + content（不再用 message 这种不存在的变量）
+    if pushplus_send "$title" "$content"; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') : ✅ 每日报告推送成功（已用 ${current_usage} GB）" | tee -a "$CRON_LOG"
     else
         echo "$(date '+%Y-%m-%d %H:%M:%S') : ❌ 每日报告推送失败" | tee -a "$CRON_LOG"
     fi
 }
+
 
 # ============================================
 # 打印实时流量信息（终端）
