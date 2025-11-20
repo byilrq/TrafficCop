@@ -69,22 +69,22 @@ install_pushplus_notifier() {
     echo -e "${CYAN}正在安装PushPlus通知功能...${NC}"
     
     # 检查pushplus_notifier.sh是否在仓库中，如果不在，使用本地的
-    if curl -s --head "$REPO_URL/pushplus_notifier.sh" | grep "HTTP/2 200\|HTTP/1.1 200" > /dev/null; then
+    if curl -s --head "$REPO_URL/pushplus.sh" | grep "HTTP/2 200\|HTTP/1.1 200" > /dev/null; then
         install_script "pushplus_notifier.sh"
-        echo -e "${RED} 已从仓库中下载最新pushplus_notifier.sh文件！${NC}"
+        echo -e "${RED} 已从仓库中下载最新pushplus.sh文件！${NC}"
     else
         echo -e "${YELLOW}从仓库下载失败，使用本地文件...${NC}"
-        # 复制当前目录下的pushplus_notifier.sh到工作目录
-        if [ -f "pushplus_notifier.sh" ]; then
-            cp "pushplus_notifier.sh" "$WORK_DIR/pushplus_notifier.sh"
-            chmod +x "$WORK_DIR/pushplus_notifier.sh"
+        # 复制当前目录下的pushplus_.sh到工作目录
+        if [ -f "pushplus.sh" ]; then
+            cp "pushplus.sh" "$WORK_DIR/pushplus.sh"
+            chmod +x "$WORK_DIR/pushplus_.sh"
         else
-            echo -e "${RED}本地pushplus_notifier.sh文件不存在！${NC}"
+            echo -e "${RED}本地pushplus.sh文件不存在！${NC}"
             read -p "按回车键继续..."
             return
         fi
     fi
-    run_script "$WORK_DIR/pushplus_notifier.sh"
+    run_script "$WORK_DIR/pushplus.sh"
         ret=$?
     case $ret in
         99)
@@ -117,7 +117,7 @@ view_logs() {
                 tail -50 "$WORK_DIR/traffic_monitor.log"
             else
                 echo -e "${RED}流量监控日志不存在${NC}"
-                echo -e "（预期位置: $WORK_DIR/traffic_monitor.log）"
+                echo -e "（预期位置: $WORK_DIR/traffic.log）"
             fi
             ;;
         2)
@@ -132,10 +132,10 @@ view_logs() {
         3)
             if [ -f "$WORK_DIR/pushplus_notifier_cron.log" ]; then
                 echo -e "${YELLOW}====== 最近 20 条 PushPlus 通知日志 ======${NC}"
-                tail -20 "$WORK_DIR/pushplus_notifier_cron.log"
+                tail -20 "$WORK_DIR/pushplus_cron.log"
             else
                 echo -e "${RED}PushPlus通知日志不存在${NC}"
-                echo -e "（预期位置: $WORK_DIR/pushplus_notifier_cron.log）"
+                echo -e "（预期位置: $WORK_DIR/pushplus_cron.log）"
             fi
             ;;
         0)
