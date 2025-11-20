@@ -346,18 +346,6 @@ get_current_traffic() {
     echo "======================================="
 }
 
-# 新增辅助函数：从主脚本读取配置（因为原 read_config 是推送专用的）
-read_config_from_monitor() {
-    local config_file="$WORK_DIR/traffic_monitor_config.txt"
-    if [ -f "$config_file" ]; then
-        source "$config_file"
-        return 0
-    else
-        echo "错误：流量监控配置文件不存在: $config_file"
-        return 1
-    fi
-}
-
 pushplus_stop() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') : 开始停止 PushPlus 推送功能。" | tee -a "$CRON_LOG"
     
