@@ -294,19 +294,6 @@ daily_report() {
     fi
 }
 # ============================================
-# 辅助函数：读取流量监控主脚本的配置
-# ============================================
-read_config_from_monitor() {
-    local config_file="$WORK_DIR/traffic_monitor_config.txt"
-    if [ -f "$config_file" ]; then
-        source "$config_file"
-        return 0
-    else
-        echo "错误：流量监控配置文件不存在: $config_file"
-        return 1
-    fi
-}
-# ============================================
 # 获取当前流量信息
 # ============================================
 get_current_traffic() {
