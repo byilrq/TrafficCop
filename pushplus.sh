@@ -457,6 +457,54 @@ setup_cron() {
     (crontab -l 2>/dev/null | grep -v "$SCRIPT_PATH -cron" | grep -v "pushplus_notifier.sh" ; echo "$entry") | crontab -
     echo "$(date '+%Y-%m-%d %H:%M:%S') : ✅ Crontab 已更新：每分钟检查一次，按设定时间发送每日报告。" | tee -a "$CRON_LOG"
 }
+# ============================================
+# 设定当前已用流量
+# ============================================
+# 手动设定本周期已使用流量（单位：GB）
+flow_setting() {
+    echo "请输入当前本周期实际已使用流量(GB)："
+    read -r real_gb
+
+    # 输入校验
+    if [[ ! $real_gb =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        echo "输入无效，请输入数字，例如 30 或 12.5"
+        return 1
+    fi
+
+    # 获取当前累计字节数 raw_bytes
+    local line raw_bytes rx tx
+    line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>/dev/null)
+
+    case $TRAFFIC_MODE in
+        out)   raw_bytes=$(echo "$line" | cut -d';' -f10) ;;
+        in)    raw_bytes=$(echo "$line" | cut -d';' -f9) ;;
+        total) raw_bytes=$(echo "$line" | cut -d';' -f11) ;;
+        max)
+            rx=$(echo "$line" | cut -d';' -f9)
+            tx=$(echo "$line" | cut -d';' -f10)
+            raw_bytes=$((rx > tx ? rx : tx))
+            ;;
+    esac
+
+    raw_bytes=${raw_bytes:-0}
+
+    # real_gb 转换为字节
+    real_bytes=$(echo "$real_gb * 1024 * 1024 * 1024" | bc | cut -d'.' -f1)
+
+    # 得到新的 offset
+    new_offset=$((raw_bytes - real_bytes))
+    [ $new_offset -lt 0 ] && new_offset=0
+
+    echo "$new_offset" > "$OFFSET_FILE"
+
+    echo "--------------------------------------"
+    echo "当前累计流量 raw_bytes : $raw_bytes bytes"
+    echo "设定本周期使用量       : $real_gb GB"
+    echo "新的 offset            : $new_offset"
+    echo "--------------------------------------"
+    echo "OFFSET 已更新完毕！"
+}
+
 
 # ============================================
 # 主入口
@@ -498,17 +546,19 @@ main() {
             echo -e "${GREEN}2.${PLAIN} 发送${CYAN}测试消息${PLAIN}"
             echo -e "${GREEN}3.${PLAIN} 打印${YELLOW}实时流量${PLAIN}"
             echo -e "${GREEN}4.${PLAIN} 修改${PURPLE}配置${PLAIN}"
-            echo -e "${RED}5.${PLAIN} 停止运行（移除定时任务）${PLAIN}"
+            echo -e "${GREEN}5.${PLAIN} 修改${PURPLE}已用流量偏移量${PLAIN}"
+            echo -e "${RED}6.${PLAIN} 停止运行（移除定时任务）${PLAIN}"
             echo -e "${WHITE}0.${PLAIN} 退出${PLAIN}"
             echo -e "${BLUE}======================================${PLAIN}"
-            read -rp "请选择操作 [0-5]: " choice
+            read -rp "请选择操作 [0-6]: " choice
             echo
             case "$choice" in
                 1) daily_report ;;
                 2) test_pushplus_notification ;;
                 3) get_current_traffic ;;
                 4) initial_config ;;
-                5) pushplus_stop ;;
+                5) flow_setting ;;      
+                6) pushplus_stop ;;
                 0) exit 0 ;;
             esac
             read -rp "按 Enter 返回菜单..."
