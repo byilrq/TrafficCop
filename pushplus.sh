@@ -306,27 +306,19 @@ daily_report() {
         return 1
     fi
 
-    local current_usage period_start traffic_mode_zh threshold
+    local usage period limit today expire_formatted expire_ts today_ts diff_days diff_emoji
 
-    current_usage=$(get_traffic_usage 2>/dev/null || echo "0.000")
-    period_start=$(get_period_start_date 2>/dev/null || echo "未知")
+    usage=$(get_traffic_usage 2>/dev/null || echo "0.000")
+    period=$(get_period_start_date 2>/dev/null || echo "未知")
 
-    case "$TRAFFIC_MODE" in
-        out)   traffic_mode_zh="仅出站" ;;
-        in)    traffic_mode_zh="仅进站" ;;
-        total) traffic_mode_zh="出+进总和" ;;
-        max)   traffic_mode_zh="出/进较大者" ;;
-        *)     traffic_mode_zh="未知" ;;
-    esac
-
-    threshold="未知"
+    # 计算阈值 = 流量限制 - 容错
     if [[ -n "$TRAFFIC_LIMIT" && -n "$TRAFFIC_TOLERANCE" ]]; then
-        threshold=$(echo "$TRAFFIC_LIMIT - $TRAFFIC_TOLERANCE" | bc 2>/dev/null || echo "未知")
-        threshold="${threshold} GB"
+        limit=$(echo "$TRAFFIC_LIMIT - $TRAFFIC_TOLERANCE" | bc 2>/dev/null || echo "未知")
+    else
+        limit="未知"
     fi
 
-    # 计算 VPS 剩余天数
-    local today expire_formatted expire_ts today_ts diff_days diff_emoji
+    # VPS 剩余天数
     today=$(date '+%Y-%m-%d')
     expire_formatted=$(echo "$EXPIRE_DATE" | tr '.' '-')
     expire_ts=$(date -d "${expire_formatted} 00:00:00" +%s 2>/dev/null)
@@ -343,30 +335,26 @@ daily_report() {
             diff_days="$((-diff_days))天前（已过期）"
         elif (( diff_days <= 30 )); then
             diff_emoji="🔴"
-            diff_days="${diff_days}天（即将到期，请尽快续费）"
+            diff_days="${diff_days}天"
         elif (( diff_days <= 60 )); then
             diff_emoji="🟡"
-            diff_days="${diff_days}天（注意续费）"
+            diff_days="${diff_days}天"
         else
-            diff_emoji="🟢"
             diff_days="${diff_days}天"
         fi
     fi
 
-    local title content
-    title="🖥️ [${MACHINE_NAME}] 每日流量报告"
-    content=""
-    content+="<font color='#4169E1'>🕒 日期：</font> $(date '+%Y-%m-%d %H:%M')<br>"
-    content+="<font color='#DC143C'>${diff_emoji} VPS剩余：</font> ${diff_days}<br><br>"
-    content+="<font color='#32CD32'>📅 本期起始：</font> ${period_start}<br>"
-    content+="<font color='#32CD32'>🔄 统计模式：</font> ${traffic_mode_zh}<br>"
-    content+="<font color='#FF8C00'>📊 本期已用：</font> <font size='5'><b>${current_usage} GB</b></font><br>"
-    content+="<font color='#9932CC'>🌐 流量套餐：</font> ${threshold}<br>"
-    content+="<font color='#696969'>🖧 接口：</font> ${MAIN_INTERFACE}<br>"
-    content+="<font color='#696969'>⚙️ 限制方式：</font> ${LIMIT_MODE:-未知}"
+    # === 构建美化消息（严格按你给的格式，不新增） ===
+    local message="🖥️ [${MACHINE_NAME}] 每日报告%0A%0A"
+    message+="🕒推送日期：$(date '+%Y-%m-%d')%0A"
+    message+="${diff_emoji}剩余天数：${diff_days}%0A"
+    message+="📅当前周期：${period}%0A"
+    message+="⌛已用流量：${usage} GB%0A"
+    message+="🌐流量套餐：${limit}"
 
-    if pushplus_send "$title" "$content"; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : ✅ 每日报告推送成功（已用 ${current_usage} GB）" | tee -a "$CRON_LOG"
+    # 推送
+    if pushplus_send "流量报告" "$message"; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') : ✅ 每日报告推送成功" | tee -a "$CRON_LOG"
     else
         echo "$(date '+%Y-%m-%d %H:%M:%S') : ❌ 每日报告推送失败" | tee -a "$CRON_LOG"
     fi
