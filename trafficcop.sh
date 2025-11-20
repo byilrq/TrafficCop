@@ -2,10 +2,10 @@
 # 设置 PATH 确保 cron 环境能找到所有命令
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WORK_DIR="/root/TrafficCop"
-CONFIG_FILE="$WORK_DIR/traffic_monitor_config.txt"
-LOG_FILE="$WORK_DIR/traffic_monitor.log"
-SCRIPT_PATH="$WORK_DIR/traffic_monitor.sh"
-LOCK_FILE="$WORK_DIR/traffic_monitor.lock"
+CONFIG_FILE="$WORK_DIR/traffic_config.txt"
+LOG_FILE="$WORK_DIR/traffic.log"
+SCRIPT_PATH="$WORK_DIR/traffic.sh"
+LOCK_FILE="$WORK_DIR/traffic.lock"
 OFFSET_FILE="$WORK_DIR/traffic_offset.dat"   # 新增：周期流量偏移基准文件
 # 设置时区为上海（东八区）
 export TZ='Asia/Shanghai'
