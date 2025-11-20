@@ -65,12 +65,12 @@ install_tg_notifier() {
 }
 
 # 安装PushPlus通知
-install_pushplus_notifier() {
+install_pushplus() {
     echo -e "${CYAN}正在安装PushPlus通知功能...${NC}"
     
-    # 检查pushplus_notifier.sh是否在仓库中，如果不在，使用本地的
+    # 检查pushplus.sh是否在仓库中，如果不在，使用本地的
     if curl -s --head "$REPO_URL/pushplus.sh" | grep "HTTP/2 200\|HTTP/1.1 200" > /dev/null; then
-        install_script "pushplus_notifier.sh"
+        install_script "pushplus.sh"
         echo -e "${RED} 已从仓库中下载最新pushplus.sh文件！${NC}"
     else
         echo -e "${YELLOW}从仓库下载失败，使用本地文件...${NC}"
@@ -387,7 +387,7 @@ main() {
                 install_tg_notifier
                 ;;
             3)
-                install_pushplus_notifier
+                install_pushplus
                 ;;
             4)
                 install_vps_moniter
