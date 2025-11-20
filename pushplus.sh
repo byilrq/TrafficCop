@@ -345,13 +345,15 @@ daily_report() {
     fi
 
     # === 构建美化消息（严格按你给的格式，不新增） ===
-    local message="🖥️ [${MACHINE_NAME}] 每日报告%0A%0A"
-    message+="🕒推送日期：$(date '+%Y-%m-%d')%0A"
-    message+="${diff_emoji}剩余天数：${diff_days}%0A"
-    message+="📅当前周期：${period}%0A"
-    message+="⌛已用流量：${usage} GB%0A"
-    message+="🌐流量套餐：${limit}"
+    local title content
+    title="🖥️ [${MACHINE_NAME}] 每日报告"
 
+    content=""
+    content+="🕒日期：${today}\n"
+    content+="${diff_emoji}剩余：${diff_days}\n"
+    content+="📅周期：${period_start} 到 ${period_end}\n"
+    content+="⌛已用：${current_usage} GB\n"
+    content+="🌐套餐：${package_limit}"
     # 推送
     if pushplus_send "流量报告" "$message"; then
         echo "$(date '+%Y-%m-%d %H:%M:%S') : ✅ 每日报告推送成功" | tee -a "$CRON_LOG"
