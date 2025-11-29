@@ -132,16 +132,35 @@ get_period_start_date() {
 save_offset_on_new_period() {
     local today=$(date +%Y-%m-%d)
     local period_start=$(get_period_start_date)
-    if [ "$today" = "$period_start" ] && [ "$(cat "$OFFSET_FILE" 2>/dev/null || echo 0)" != "0" ] || [ ! -f "$OFFSET_FILE" ]; then
-        # 取当前累计总量作为新基准
+    if { [ "$today" = "$period_start" ] && [ "$(cat "$OFFSET_FILE" 2>/dev/null || echo 0)" != "0" ]; } || [ ! -f "$OFFSET_FILE" ]; then
         local total_bytes=0
-        local line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>/dev/null)
+        local line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>&1 || echo "")
+
+        if echo "$line" | grep -qi "Not enough data available yet"; then
+            echo "$(date '+%Y-%m-%d %H:%M:%S') 新周期开始但 vnstat 数据尚未就绪，暂不更新偏移基准" | tee -a "$LOG_FILE"
+            return
+        fi
+
         case $TRAFFIC_MODE in
             out)   total_bytes=$(echo "$line" | cut -d';' -f10) ;;
             in)    total_bytes=$(echo "$line" | cut -d';' -f9) ;;
             total) total_bytes=$(echo "$line" | cut -d';' -f11) ;;
-            max)   local rx=$(echo "$line" | cut -d';' -f9); local tx=$(echo "$line" | cut -d';' -f10); total_bytes=$((rx > tx ? rx : tx)) ;;
+            max)
+                local rx=$(echo "$line" | cut -d';' -f9)
+                local tx=$(echo "$line" | cut -d';' -f10)
+                rx=${rx:-0}; tx=${tx:-0}
+                [[ "$rx" =~ ^[0-9]+$ ]] || rx=0
+                [[ "$tx" =~ ^[0-9]+$ ]] || tx=0
+                total_bytes=$((rx > tx ? rx : tx))
+                ;;
         esac
+
+        # 不是纯数字就放弃更新
+        if ! [[ "$total_bytes" =~ ^[0-9]+$ ]]; then
+            echo "$(date '+%Y-%m-%d %H:%M:%S') 新周期基准异常(total_bytes=$total_bytes)，暂不更新 OFFSET" | tee -a "$LOG_FILE"
+            return
+        fi
+
         echo "$total_bytes" > "$OFFSET_FILE"
         echo "$(date '+%Y-%m-%d %H:%M:%S') 新周期开始，流量统计已重置为0（基准已更新）" | tee -a "$LOG_FILE"
         tc qdisc del dev "$MAIN_INTERFACE" root 2>/dev/null
@@ -149,22 +168,70 @@ save_offset_on_new_period() {
     fi
 }
 
+
 # 获取本周期真实使用流量（已减去偏移量）
 get_traffic_usage() {
-    local offset=$(cat "$OFFSET_FILE" 2>/dev/null || echo 0)
-    local line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>/dev/null || echo "")
-    local raw_bytes=0
+    local offset raw_bytes real_bytes line rx tx
+
+    offset=$(cat "$OFFSET_FILE" 2>/dev/null || echo 0)
+
+    # 把 stderr 一起抓回来，方便判断错误信息
+    line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>&1 || echo "")
+
+    # 如果 vnstat 还没数据，输出提示并按 0 处理
+    if echo "$line" | grep -qi "Not enough data available yet"; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') vnstat 数据尚未准备好，暂按 0 GB 处理（接口：$MAIN_INTERFACE）" | tee -a "$LOG_FILE"
+        printf "0.000"
+        return 0
+    fi
+
+    # 如果 line 为空，也按 0 处理
+    if [ -z "$line" ]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') vnstat 输出为空，暂按 0 GB 处理（接口：$MAIN_INTERFACE）" | tee -a "$LOG_FILE"
+        printf "0.000"
+        return 0
+    fi
+
+    raw_bytes=0
     case $TRAFFIC_MODE in
-        out)   raw_bytes=$(echo "$line" | cut -d';' -f10) ;;
-        in)    raw_bytes=$(echo "$line" | cut -d';' -f9) ;;
-        total) raw_bytes=$(echo "$line" | cut -d';' -f11) ;;
-        max)   local rx=$(echo "$line" | cut -d';' -f9); local tx=$(echo "$line" | cut -d';' -f10); raw_bytes=$((rx > tx ? rx : tx)) ;;
+        out)
+            raw_bytes=$(echo "$line" | cut -d';' -f10)
+            ;;
+        in)
+            raw_bytes=$(echo "$line" | cut -d';' -f9)
+            ;;
+        total)
+            raw_bytes=$(echo "$line" | cut -d';' -f11)
+            ;;
+        max)
+            rx=$(echo "$line" | cut -d';' -f9)
+            tx=$(echo "$line" | cut -d';' -f10)
+            rx=${rx:-0}
+            tx=${tx:-0}
+            # 如果不是数字就归零
+            [[ "$rx" =~ ^[0-9]+$ ]] || rx=0
+            [[ "$tx" =~ ^[0-9]+$ ]] || tx=0
+            if [ "$rx" -gt "$tx" ] 2>/dev/null; then
+                raw_bytes="$rx"
+            else
+                raw_bytes="$tx"
+            fi
+            ;;
     esac
+
     raw_bytes=${raw_bytes:-0}
-    local real_bytes=$((raw_bytes - offset))
-    [ $real_bytes -lt 0 ] && real_bytes=0
+    # 再做一次数字检查，防止 cut 出来的不是数字
+    if ! [[ "$raw_bytes" =~ ^[0-9]+$ ]]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') vnstat 数据异常(raw_bytes=$raw_bytes)，暂按 0 处理" | tee -a "$LOG_FILE"
+        raw_bytes=0
+    fi
+
+    real_bytes=$((raw_bytes - offset))
+    [ "$real_bytes" -lt 0 ] && real_bytes=0
+
     printf "%.3f" "$(echo "scale=6; $real_bytes/1024/1024/1024" | bc 2>/dev/null || echo 0)"
 }
+
 
 # 检查并执行限速/关机
 check_and_limit_traffic() {
