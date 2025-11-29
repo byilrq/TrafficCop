@@ -99,6 +99,99 @@ initial_config() {
         esac
     done
     write_config
+
+ echo
+    echo "================ 流量基准设置 ================"
+    echo "你可以在这里手动设定“本周期已使用流量（GB）”，"
+    echo "用于同步运营商面板 / 实际使用情况。"
+    echo "如果不确定，直接回车，默认从 0 开始统计。"
+    echo "=============================================="
+    read -p "请输入当前本周期实际已使用流量(GB，默认0): " real_gb
+
+    # 如果直接回车，就把 OFFSET_FILE 设为 0
+    if [ -z "$real_gb" ]; then
+        echo 0 > "$OFFSET_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') 首次初始化 OFFSET_FILE，设置为 0（本周期从 0GB 开始统计）" | tee -a "$LOG_FILE"
+        return
+    fi
+
+    # 校验输入是否为数字
+    if ! [[ "$real_gb" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        echo "输入格式不正确，已按 0GB 处理。"
+        echo 0 > "$OFFSET_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') OFFSET_FILE 设置为 0（用户输入无效）" | tee -a "$LOG_FILE"
+        return
+    fi
+
+    # 读取当前 vnstat 累计字节数 raw_bytes
+    local line raw_bytes rx tx
+    line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>&1 || echo "")
+
+    # vnstat 还没数据的情况
+    if echo "$line" | grep -qi "Not enough data available yet"; then
+        echo "vnstat 数据尚未准备好，无法根据当前累计流量反推 offset。"
+        echo "已暂时将 OFFSET_FILE 设置为 0，本周期从 $real_gb GB 逻辑上会不精确。"
+        echo 0 > "$OFFSET_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') vnstat 无数据，OFFSET_FILE 强制设为 0" | tee -a "$LOG_FILE"
+        return
+    fi
+
+    if [ -z "$line" ]; then
+        echo "vnstat 输出为空，已将 OFFSET_FILE 设置为 0。"
+        echo 0 > "$OFFSET_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') vnstat 输出为空，OFFSET_FILE 强制设为 0" | tee -a "$LOG_FILE"
+        return
+    fi
+
+    raw_bytes=0
+    case $TRAFFIC_MODE in
+        out)
+            raw_bytes=$(echo "$line" | cut -d';' -f10)
+            ;;
+        in)
+            raw_bytes=$(echo "$line" | cut -d';' -f9)
+            ;;
+        total)
+            raw_bytes=$(echo "$line" | cut -d';' -f11)
+            ;;
+        max)
+            rx=$(echo "$line" | cut -d';' -f9)
+            tx=$(echo "$line" | cut -d';' -f10)
+            rx=${rx:-0}
+            tx=${tx:-0}
+            [[ "$rx" =~ ^[0-9]+$ ]] || rx=0
+            [[ "$tx" =~ ^[0-9]+$ ]] || tx=0
+            if [ "$rx" -gt "$tx" ] 2>/dev/null; then
+                raw_bytes="$rx"
+            else
+                raw_bytes="$tx"
+            fi
+            ;;
+    esac
+
+    # 防止 raw_bytes 不是数字
+    if ! [[ "$raw_bytes" =~ ^[0-9]+$ ]]; then
+        echo "vnstat 返回的累计流量不是纯数字(raw_bytes=$raw_bytes)，OFFSET_FILE 将设为 0。"
+        echo 0 > "$OFFSET_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') raw_bytes 异常，OFFSET_FILE 强制设为 0" | tee -a "$LOG_FILE"
+        return
+    fi
+
+    # real_gb 转字节（用 1024^3，与 get_traffic_usage 保持一致）
+    local real_bytes new_offset
+    real_bytes=$(echo "$real_gb * 1024 * 1024 * 1024" | bc | cut -d'.' -f1)
+    new_offset=$((raw_bytes - real_bytes))
+    [ "$new_offset" -lt 0 ] && new_offset=0
+
+    echo "$new_offset" > "$OFFSET_FILE"
+
+    echo "--------------------------------------"
+    echo "当前累计流量 raw_bytes : $raw_bytes bytes"
+    echo "你设定的本周期已用    : $real_gb GB"
+    echo "计算得到新的 offset   : $new_offset"
+    echo "已写入 $OFFSET_FILE"
+    echo "--------------------------------------"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') 首次配置时设置 OFFSET_FILE=$new_offset（对应本周期已用 $real_gb GB）" | tee -a "$LOG_FILE"
 }
 
 # 获取当前周期起始日期
