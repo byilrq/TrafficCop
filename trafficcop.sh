@@ -181,8 +181,9 @@ initial_config() {
     local real_bytes new_offset
     real_bytes=$(echo "$real_gb * 1024 * 1024 * 1024" | bc | cut -d'.' -f1)
     new_offset=$((raw_bytes - real_bytes))
-    [ "$new_offset" -lt 0 ] && new_offset=0
-
+    # 注：这里刻意允许 new_offset 为负数，用于“新机器补历史用量”
+    # 例如 raw≈0.7GB、你填 60GB，则 offset≈-59GB，
+    # 后续 real = raw - offset = raw + 59GB，正好从 60GB 起算
     echo "$new_offset" > "$OFFSET_FILE"
 
     echo "--------------------------------------"
