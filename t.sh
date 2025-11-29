@@ -262,27 +262,119 @@ update_all_scripts() {
 
 
 # 读取当前总流量  Traffic_all 函数：读取当前流量并打印，用于测试统计和记录
+# 读取当前总流量（不再 source trafficcop.sh，直接读配置+vnstat）
 Traffic_all() {
-    if [ -f "$WORK_DIR/trafficcop.sh" ]; then
-        # Source the trafficcop.sh to load required functions (suppress output to avoid running main logic)
-        source "$WORK_DIR/trafficcop.sh" >/dev/null 2>&1
-    else
-        echo -e "${RED}流量监控脚本 (trafficcop.sh) 不存在，请先安装流量监控功能 (选项1)。${NC}"
+    local config_file="$WORK_DIR/traffic_config.txt"
+    local offset_file="$WORK_DIR/traffic_offset.dat"
+
+    if [ ! -f "$config_file" ]; then
+        echo -e "${RED}找不到流量监控配置文件：$config_file${NC}"
+        echo -e "请先运行一次 ${YELLOW}流量监控安装/配置（菜单 1）${NC}"
         return 1
     fi
 
-    if read_config; then # 加载配置（TRAFFIC_MODE, TRAFFIC_PERIOD 等）
-        local current_usage=$(get_traffic_usage)
-        local start_date=$(get_period_start_date)
-        local end_date=$(get_period_end_date)
-        echo "$(date '+%Y-%m-%d %H:%M:%S') 当前周期: $start_date 到 $end_date"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') 统计模式: $TRAFFIC_MODE"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') 当前流量使用: $current_usage GB"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') 测试记录: vnstat 数据库路径 /var/lib/vnstat/$MAIN_INTERFACE (检查文件修改时间以验证更新)"
+    # 读取配置：TRAFFIC_MODE / TRAFFIC_PERIOD / PERIOD_START_DAY / MAIN_INTERFACE / 限制等
+    # shellcheck disable=SC1090
+    source "$config_file"
+
+    # 读 OFFSET，如果没有就按 0
+    local offset
+    offset=$(cat "$offset_file" 2>/dev/null || echo 0)
+    [[ -z "$offset" ]] && offset=0
+
+    # 从 vnstat 取当前累计字节数
+    local line raw_bytes rx tx
+    line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>&1 || echo "")
+
+    if echo "$line" | grep -qi "Not enough data available yet"; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') vnstat 数据尚未准备好（接口：$MAIN_INTERFACE），暂按 0GB 处理。"
+        raw_bytes=0
+    elif [ -z "$line" ]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') vnstat 输出为空（接口：$MAIN_INTERFACE），暂按 0GB 处理。"
+        raw_bytes=0
     else
-        echo "$(date '+%Y-%m-%d %H:%M:%S') 配置加载失败，无法读取流量"
+        case "$TRAFFIC_MODE" in
+            out)
+                raw_bytes=$(echo "$line" | cut -d';' -f10)
+                ;;
+            in)
+                raw_bytes=$(echo "$line" | cut -d';' -f9)
+                ;;
+            total)
+                raw_bytes=$(echo "$line" | cut -d';' -f11)
+                ;;
+            max)
+                rx=$(echo "$line" | cut -d';' -f9)
+                tx=$(echo "$line" | cut -d';' -f10)
+                rx=${rx:-0}
+                tx=${tx:-0}
+                [[ "$rx" =~ ^[0-9]+$ ]] || rx=0
+                [[ "$tx" =~ ^[0-9]+$ ]] || tx=0
+                if [ "$rx" -gt "$tx" ] 2>/dev/null; then
+                    raw_bytes="$rx"
+                else
+                    raw_bytes="$tx"
+                fi
+                ;;
+            *)
+                raw_bytes=0
+                ;;
+        esac
     fi
+
+    [[ "$raw_bytes" =~ ^[0-9]+$ ]] || raw_bytes=0
+
+    local real_bytes=$((raw_bytes - offset))
+    [ "$real_bytes" -lt 0 ] && real_bytes=0
+
+    local usage_gb
+    usage_gb=$(echo "scale=3; $real_bytes/1024/1024/1024" | bc 2>/dev/null || echo 0)
+
+    # 计算当前周期起始日期（简化版，与 trafficcop 的 get_period_start_date 逻辑一致）
+    local y m d period_start
+    y=$(date +%Y)
+    m=$(date +%m)
+    d=$(date +%d)
+    PERIOD_START_DAY=${PERIOD_START_DAY:-1}
+
+    case "$TRAFFIC_PERIOD" in
+        monthly)
+            if [ "$d" -lt "$PERIOD_START_DAY" ]; then
+                period_start=$(date -d "$y-$m-$PERIOD_START_DAY -1 month" +%Y-%m-%d 2>/dev/null || \
+                               date -d "$y-$(expr "$m" - 1)-$PERIOD_START_DAY" +%Y-%m-%d)
+            else
+                period_start=$(date -d "$y-$m-$PERIOD_START_DAY" +%Y-%m-%d)
+            fi
+            ;;
+        quarterly)
+            local mm qm
+            mm=$((10#$m))
+            qm=$(( ((mm-1)/3*3 +1) ))
+            qm=$(printf "%02d" "$qm")
+            if [ "$d" -lt "$PERIOD_START_DAY" ]; then
+                period_start=$(date -d "$y-$qm-$PERIOD_START_DAY -3 months" +%Y-%m-%d)
+            else
+                period_start=$(date -d "$y-$qm-$PERIOD_START_DAY" +%Y-%m-%d)
+            fi
+            ;;
+        yearly)
+            if [ "$d" -lt "$PERIOD_START_DAY" ]; then
+                period_start=$(date -d "$((y-1))-01-$PERIOD_START_DAY" +%Y-%m-%d)
+            else
+                period_start=$(date -d "$y-01-$PERIOD_START_DAY" +%Y-%m-%d)
+            fi
+            ;;
+        *)
+            period_start=$(date -d "$y-$m-${PERIOD_START_DAY:-1}" +%Y-%m-%d)
+            ;;
+    esac
+
+    echo "$(date '+%Y-%m-%d %H:%M:%S') 当前周期: ${period_start} 起（按 $TRAFFIC_PERIOD 统计）"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') 统计模式: $TRAFFIC_MODE"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') 当前流量使用: $usage_gb GB"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') 测试记录: vnstat 数据库路径 /var/lib/vnstat/$MAIN_INTERFACE (检查文件修改时间以验证更新)"
 }
+
 
 # 监控vpschannel
 install_vps_moniter() {
