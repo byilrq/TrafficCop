@@ -458,42 +458,96 @@ setup_cron() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') : ✅ Crontab 已更新：每分钟检查一次，按设定时间发送每日报告。" | tee -a "$CRON_LOG"
 }
 # ============================================
-# 设定当前已用流量
+# 手动修正本周期已使用流量（单位：GB）
 # ============================================
-# 手动设定本周期已使用流量（单位：GB）
 flow_setting() {
+    echo "================ 手动修正本周期流量 ================"
+    echo "用于在运行一段时间后，调整当前周期已用流量（比如对齐运营商面板）。"
+    echo "注意：这里输入的是【本周期应当已经使用的总量】，不是要增加的差值。"
+    echo "===================================================="
+    echo
     echo "请输入当前本周期实际已使用流量(GB)："
     read -r real_gb
 
     # 输入校验
-    if [[ ! $real_gb =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    if ! [[ "$real_gb" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
         echo "输入无效，请输入数字，例如 30 或 12.5"
+        return 1
+    fi
+
+    # 确保 MAIN_INTERFACE / TRAFFIC_MODE 已就绪（如果是脚本内部调用一般已有）
+    if { [ -z "$MAIN_INTERFACE" ] || [ -z "$TRAFFIC_MODE" ]; } && [ -f "$CONFIG_FILE" ]; then
+        # shellcheck disable=SC1090
+        source "$CONFIG_FILE"
+    fi
+
+    if [ -z "$MAIN_INTERFACE" ] || [ -z "$TRAFFIC_MODE" ]; then
+        echo "错误：未能获取 MAIN_INTERFACE / TRAFFIC_MODE，请先完成流量监控配置。"
         return 1
     fi
 
     # 获取当前累计字节数 raw_bytes
     local line raw_bytes rx tx
-    line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>/dev/null)
+    line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>&1 || echo "")
 
+    # vnstat 还没数据
+    if echo "$line" | grep -qi "Not enough data available yet"; then
+        echo "vnstat 数据尚未准备好，当前无法根据累计流量反推 offset。"
+        echo "请等待一段时间（产生一些流量）后再尝试。"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') flow_setting：vnstat 无数据，放弃修改 OFFSET_FILE" | tee -a "$LOG_FILE"
+        return 1
+    fi
+
+    if [ -z "$line" ]; then
+        echo "vnstat 输出为空，无法计算 raw_bytes。"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') flow_setting：vnstat 输出为空，放弃修改 OFFSET_FILE" | tee -a "$LOG_FILE"
+        return 1
+    fi
+
+    raw_bytes=0
     case $TRAFFIC_MODE in
-        out)   raw_bytes=$(echo "$line" | cut -d';' -f10) ;;
-        in)    raw_bytes=$(echo "$line" | cut -d';' -f9) ;;
-        total) raw_bytes=$(echo "$line" | cut -d';' -f11) ;;
+        out)
+            raw_bytes=$(echo "$line" | cut -d';' -f10)
+            ;;
+        in)
+            raw_bytes=$(echo "$line" | cut -d';' -f9)
+            ;;
+        total)
+            raw_bytes=$(echo "$line" | cut -d';' -f11)
+            ;;
         max)
             rx=$(echo "$line" | cut -d';' -f9)
             tx=$(echo "$line" | cut -d';' -f10)
-            raw_bytes=$((rx > tx ? rx : tx))
+            rx=${rx:-0}
+            tx=${tx:-0}
+            [[ "$rx" =~ ^[0-9]+$ ]] || rx=0
+            [[ "$tx" =~ ^[0-9]+$ ]] || tx=0
+            if [ "$rx" -gt "$tx" ] 2>/dev/null; then
+                raw_bytes="$rx"
+            else
+                raw_bytes="$tx"
+            fi
+            ;;
+        *)
+            raw_bytes=0
             ;;
     esac
 
     raw_bytes=${raw_bytes:-0}
 
-    # real_gb 转换为字节
+    # 防止 raw_bytes 不是数字
+    if ! [[ "$raw_bytes" =~ ^[0-9]+$ ]]; then
+        echo "vnstat 返回的累计流量不是纯数字(raw_bytes=$raw_bytes)，无法安全计算 offset。"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') flow_setting：raw_bytes 异常($raw_bytes)，放弃修改 OFFSET_FILE" | tee -a "$LOG_FILE"
+        return 1
+    fi
+
+    # real_gb 转换为字节（1024^3）
+    local real_bytes new_offset
     real_bytes=$(echo "$real_gb * 1024 * 1024 * 1024" | bc | cut -d'.' -f1)
 
-    # 得到新的 offset
+    # 得到新的 offset（允许为负数，用于补历史用量）
     new_offset=$((raw_bytes - real_bytes))
-    [ $new_offset -lt 0 ] && new_offset=0
 
     echo "$new_offset" > "$OFFSET_FILE"
 
@@ -501,9 +555,11 @@ flow_setting() {
     echo "当前累计流量 raw_bytes : $raw_bytes bytes"
     echo "设定本周期使用量       : $real_gb GB"
     echo "新的 offset            : $new_offset"
+    echo "（后续统计：已用 = 当前累计 - offset，将从 ${real_gb}GB 附近开始往上增长）"
     echo "--------------------------------------"
-    echo "OFFSET 已更新完毕！"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') flow_setting：手动设置 OFFSET_FILE=$new_offset（对应本周期已用 $real_gb GB）" | tee -a "$LOG_FILE"
 }
+
 
 
 # ============================================
