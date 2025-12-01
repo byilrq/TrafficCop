@@ -441,6 +441,9 @@ install_nodeseek_moniter() {
 # ======================================================
 # 手动设置已用流量
 # ======================================================
+# ======================================================
+# 手动设置已用流量（管理脚本版本）
+# ======================================================
 flow_setting() {
     echo "================ 手动修正本周期流量 ================"
     echo "用于在运行一段时间后，调整当前周期已用流量（比如对齐运营商面板）。"
@@ -456,14 +459,19 @@ flow_setting() {
         return 1
     fi
 
-    # 确保 MAIN_INTERFACE / TRAFFIC_MODE 已就绪（如果是脚本内部调用一般已有）
-    if { [ -z "$MAIN_INTERFACE" ] || [ -z "$TRAFFIC_MODE" ]; } && [ -f "$CONFIG_FILE" ]; then
+    # 这些路径在“管理脚本”里自己定义，不再依赖 trafficcop.sh 的变量
+    local config_file="$WORK_DIR/traffic_config.txt"
+    local offset_file="$WORK_DIR/traffic_offset.dat"
+    local log_file="$WORK_DIR/traffic.log"
+
+    # 尝试从配置文件加载 MAIN_INTERFACE / TRAFFIC_MODE
+    if { [ -z "$MAIN_INTERFACE" ] || [ -z "$TRAFFIC_MODE" ]; } && [ -f "$config_file" ]; then
         # shellcheck disable=SC1090
-        source "$CONFIG_FILE"
+        source "$config_file"
     fi
 
     if [ -z "$MAIN_INTERFACE" ] || [ -z "$TRAFFIC_MODE" ]; then
-        echo "错误：未能获取 MAIN_INTERFACE / TRAFFIC_MODE，请先完成流量监控配置。"
+        echo "错误：未能获取 MAIN_INTERFACE / TRAFFIC_MODE，请先在菜单[1]完成流量监控安装/配置。"
         return 1
     fi
 
@@ -475,13 +483,13 @@ flow_setting() {
     if echo "$line" | grep -qi "Not enough data available yet"; then
         echo "vnstat 数据尚未准备好，当前无法根据累计流量反推 offset。"
         echo "请等待一段时间（产生一些流量）后再尝试。"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') flow_setting：vnstat 无数据，放弃修改 OFFSET_FILE" | tee -a "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') flow_setting：vnstat 无数据，放弃修改 OFFSET_FILE" | tee -a "$log_file"
         return 1
     fi
 
     if [ -z "$line" ]; then
         echo "vnstat 输出为空，无法计算 raw_bytes。"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') flow_setting：vnstat 输出为空，放弃修改 OFFSET_FILE" | tee -a "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') flow_setting：vnstat 输出为空，放弃修改 OFFSET_FILE" | tee -a "$log_file"
         return 1
     fi
 
@@ -519,7 +527,7 @@ flow_setting() {
     # 防止 raw_bytes 不是数字
     if ! [[ "$raw_bytes" =~ ^[0-9]+$ ]]; then
         echo "vnstat 返回的累计流量不是纯数字(raw_bytes=$raw_bytes)，无法安全计算 offset。"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') flow_setting：raw_bytes 异常($raw_bytes)，放弃修改 OFFSET_FILE" | tee -a "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') flow_setting：raw_bytes 异常($raw_bytes)，放弃修改 OFFSET_FILE" | tee -a "$log_file"
         return 1
     fi
 
@@ -530,7 +538,7 @@ flow_setting() {
     # 得到新的 offset（允许为负数，用于补历史用量）
     new_offset=$((raw_bytes - real_bytes))
 
-    echo "$new_offset" > "$OFFSET_FILE"
+    echo "$new_offset" > "$offset_file"
 
     echo "--------------------------------------"
     echo "当前累计流量 raw_bytes : $raw_bytes bytes"
@@ -538,8 +546,9 @@ flow_setting() {
     echo "新的 offset            : $new_offset"
     echo "（后续统计：已用 = 当前累计 - offset，将从 ${real_gb}GB 附近开始往上增长）"
     echo "--------------------------------------"
-    echo "$(date '+%Y-%m-%d %H:%M:%S') flow_setting：手动设置 OFFSET_FILE=$new_offset（对应本周期已用 $real_gb GB）" | tee -a "$LOG_FILE"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') flow_setting：手动设置 OFFSET_FILE=$new_offset（对应本周期已用 $real_gb GB）" | tee -a "$log_file"
 }
+
 
 # 显示主菜单
 show_main_menu() {
@@ -572,7 +581,7 @@ main() {
     
     while true; do
         show_main_menu
-        read -p "请选择操作 [0-10]: " choice
+        read -p "请选择操作 [0-11]: " choice
         
         case $choice in
             1)
