@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================
-# Telegram 通知脚本 for TrafficCop（完整版）
-# 文件名建议：/root/TrafficCop/tg_notifier.sh
+# Telegram 流量监控通知脚本（完美复刻 pushplus 风格 + 最新消息格式）
+# 文件名：/root/TrafficCop/tg_notifier.sh
 # ============================================
 export TZ='Asia/Shanghai'
 
@@ -23,18 +23,16 @@ echo "----------------------------------------------" | tee -a "$CRON_LOG"
 echo "$(date '+%Y-%m-%d %H:%M:%S') : 启动 Telegram 通知脚本" | tee -a "$CRON_LOG"
 cd "$WORK_DIR" || exit 1
 
-# ==================== 防重 ====================
 check_running() {
     if pidof -x "$(basename "$0")" -o $$ >/dev/null 2>&1; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : 脚本已在运行，退出。" | tee -a "$CRON_LOG"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') : 已有实例运行，退出。" | tee -a "$CRON_LOG"
         exit 1
     fi
 }
 
-# ==================== 配置读写 ====================
 read_config() {
     [ ! -s "$CONFIG_FILE" ] && return 1
-    source "$CONFIG_FILE"
+    source "$CONFIG_FILE" 2>/dev/null
     [[ -z "$TG_BOT_TOKEN" || -z "$TG_CHAT_ID" || -z "$MACHINE_NAME" || -z "$DAILY_REPORT_TIME" || -z "$EXPIRE_DATE" ]] && return 1
     return 0
 }
@@ -47,9 +45,9 @@ MACHINE_NAME="$MACHINE_NAME"
 DAILY_REPORT_TIME="$DAILY_REPORT_TIME"
 EXPIRE_DATE="$EXPIRE_DATE"
 EOF
+    echo "配置已保存到 $CONFIG_FILE" | tee -a "$CRON_LOG"
 }
 
-# ==================== 读取流量配置 ====================
 read_traffic_config() {
     [ ! -s "$TRAFFIC_CONFIG" ] && return 1
     source "$TRAFFIC_CONFIG"
@@ -57,22 +55,14 @@ read_traffic_config() {
     return 0
 }
 
-# ==================== 周期计算（与原版完全一致） ====================
 get_period_start_date() {
     local y m d
     y=$(date +%Y); m=$(date +%m); d=$(date +%d)
     case $TRAFFIC_PERIOD in
-        monthly)
-            [ "$d" -lt "$PERIOD_START_DAY" ] && date -d "$y-$m-$PERIOD_START_DAY -1 month" +%Y-%m-%d || date -d "$y-$m-$PERIOD_START_DAY" +%Y-%m-%d
-            ;;
-        quarterly)
-            local qm=$(( ((10#$m-1)/3*3 +1) )); qm=$(printf "%02d" $qm)
-            [ "$d" -lt "$PERIOD_START_DAY" ] && date -d "$y-$qm-$PERIOD_START_DAY -3 months" +%Y-%m-%d || date -d "$y-$qm-$PERIOD_START_DAY" +%Y-%m-%d
-            ;;
-        yearly)
-            [ "$d" -lt "$PERIOD_START_DAY" ] && date -d "$((y-1))-01-$PERIOD_START_DAY" +%Y-%m-%d || date -d "$y-01-$PERIOD_START_DAY" +%Y-%m-%d
-            ;;
-        *) date -d "$y-$m-${PERIOD_START_DAY:-1}" +%Y-%m-%d ;;
+        monthly)   [ "$d" -lt "$PERIOD_START_DAY" ] && date -d "$y-$m-$PERIOD_START_DAY -1 month" +%Y-%m-%d 2>/dev/null || date -d "$y-$m-$PERIOD_START_DAY" +%Y-%m-%d ;;
+        quarterly) local qm=$(( ((10#$m-1)/3*3 +1) )); qm=$(printf "%02d" $qm); [ "$d" -lt "$PERIOD_START_DAY" ] && date -d "$y-$qm-$PERIOD_START_DAY -3 months" +%Y-%m-%d || date -d "$y-$qm-$PERIOD_START_DAY" +%Y-%m-%d ;;
+        yearly)    [ "$d" -lt "$PERIOD_START_DAY" ] && date -d "$((y-1))-01-$PERIOD_START_DAY" +%Y-%m-%d || date -d "$y-01-$PERIOD_START_DAY" +%Y-%m-%d ;;
+        *)         date -d "$y-$m-${PERIOD_START_DAY:-1}" +%Y-%m-%d ;;
     esac
 }
 
@@ -87,21 +77,18 @@ get_period_end_date() {
 }
 
 get_traffic_usage() {
-    local offset raw_bytes=0 line rx tx
+    local offset raw=0 line rx tx
     offset=$(cat "$OFFSET_FILE" 2>/dev/null || echo 0)
     line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>/dev/null || echo "")
     case $TRAFFIC_MODE in
-        out)   raw_bytes=$(echo "$line"|cut -d';' -f10) ;;
-        in)    raw_bytes=$(echo "$line"|cut -d';' -f9) ;;
-        total)  raw_bytes=$(echo "$line"|cut -d';' -f11) ;;
-        max)
-            rx=$(echo "$line"|cut -d';' -f9); tx=$(echo "$line"|cut -d';' -f10)
-            [[ $rx -gt $tx ]] 2>/dev/null && raw_bytes=$rx || raw_bytes=$tx
-            ;;
+        out)   raw=$(echo "$line"|cut -d';' -f10) ;;
+        in)    raw=$(echo "$line"|cut -d';' -f9) ;;
+        total) raw=$(echo "$line"|cut -d';' -f11) ;;
+        max)   rx=$(echo "$line"|cut -d';' -f9); tx=$(echo "$line"|cut -d';' -f10); [[ $rx -gt $tx ]] 2>/dev/null && raw=$rx || raw=$tx ;;
     esac
-    raw_bytes=${raw_bytes:-0}
-    local real=$((raw_bytes - offset))
-    [ "$real" -lt 0 ] && real=0
+    raw=${raw:-0}
+    local real=$((raw - offset))
+    (( real < 0 )) && real=0
     printf "%.3f" "$(echo "scale=6; $real/1024/1024/1024" | bc 2>/dev/null || echo 0)"
 }
 
@@ -112,46 +99,49 @@ tg_send() {
         -d "chat_id=${TG_CHAT_ID}" \
         -d "text=${text}" \
         -d "parse_mode=HTML" \
-        -d "disable_web_page_preview=true" >/dev/null
-    if [ $? -eq 0 ]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : Telegram 发送成功" | tee -a "$CRON_LOG"
-    else
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : Telegram 发送失败" | tee -a "$CRON_LOG"
-    fi
+        -d "disable_web_page_preview=true" > /dev/null 2>&1
+    [ $? -eq 0 ] && echo "$(date '+%Y-%m-%d %H:%M:%S') : Telegram 推送成功" | tee -a "$CRON_LOG" \
+                || echo "$(date '+%Y-%m-%d %H:%M:%S') : Telegram 推送失败" | tee -a "$CRON_LOG"
 }
 
 test_telegram() {
-    tg_send "<b>${MACHINE_NAME}</b> 测试消息\n\nTelegram 配置正常！"
+    tg_send "🖥️ <b>[${MACHINE_NAME}]</b> 测试消息\n\n这是一条测试消息，如果您收到此推送，说明 Telegram 配置正常！"
 }
 
-# ==================== 每日报告（5 行格式） ====================
+# ==================== 每日报告（您最新要求的格式） ====================
 daily_report() {
-    read_traffic_config || return 1
-    local usage start end limit today diff_days emoji
-    usage=$(get_traffic_usage)
-    start=$(get_period_start_date)
-    end=$(get_period_end_date "$start")
-    limit=$(echo "$TRAFFIC_LIMIT - $TRAFFIC_TOLERANCE" | bc 2>/dev/null || echo "未知")" GB"
+    if ! read_traffic_config; then
+        echo "未找到 TrafficCop 配置" | tee -a "$CRON_LOG"
+        return 1
+    fi
 
-    today=$(date +%Y-%m-%d)
-    expire_ts=$(date -d "${EXPIRE_DATE//./-}" +%s 2>/dev/null)
-    today_ts=$(date -d "$today" +%s)
-    diff_days=$(( (expire_ts - today_ts)/86400 ))
-    if [ "$diff_days" -lt 0 ];  then emoji="Overdue"; diff_days="$((-diff_days))天前"
-    elif [ "$diff_days" -le 30 ]; then emoji="Warning"
-    elif [ "$diff_days" -le 60 ]; then emoji="Warning"
-    else emoji="OK"; fi
+    local usage=$(get_traffic_usage)
+    local start=$(get_period_start_date)
+    local end=$(get_period_end_date "$start")
+    local limit="${TRAFFIC_LIMIT} GB"
 
-    tg_send "<b>${MACHINE_NAME}</b> 每日报告
+    local today=$(date +%Y-%m-%d)
+    local expire_ts=$(date -d "${EXPIRE_DATE//./-}" +%s 2>/dev/null)
+    local today_ts=$(date -d "$today" +%s 2>/dev/null)
+    local diff_days=$(( (expire_ts - today_ts) / 86400 ))
+    local remain_emoji="🟢"
+    if (( diff_days <= 0 )); then
+        remain_emoji="⚫"; diff_days="已到期"
+    elif (( diff_days <= 30 )); then
+        remain_emoji="🔴"
+    elif (( diff_days <= 60 )); then
+        remain_emoji="🟡"
+    fi
 
-日期：${today}
-${emoji}剩余：${diff_days}天
-周期：${start} 到 ${end}
-已用：${usage} GB
-套餐：${limit}"
+    tg_send "🖥️ <b>[${MACHINE_NAME}]</b> 每日报告
+    
+🕒日期：${today}
+${remain_emoji}剩余：${diff_days}天
+📅周期：${start} 到 ${end}
+⌛已用：${usage} GB
+🌐套餐：${limit}"
 }
 
-# ==================== 实时流量打印 ====================
 get_current_traffic() {
     read_traffic_config || { echo "请先运行 trafficcop.sh 初始化"; return; }
     local usage=$(get_traffic_usage)
@@ -168,78 +158,110 @@ get_current_traffic() {
     echo "========================================"
 }
 
-# ==================== 手动修正流量 ====================
 flow_setting() {
     echo "请输入本周期实际已用流量（GB）:"
     read real_gb
-    [[ ! $real_gb =~ ^[0-9]+(\.[0-9]+)?$ ]] && { echo "格式错误"; return; }
+    [[ ! $real_gb =~ ^[0-9]+(\.[0-9]+)?$ ]] && { echo "输入无效"; return; }
     read_traffic_config || return
     local line raw rx tx
-    line=$(vnstat -i "$MAIN_INTERFACE" --oneline b)
-    case $TRAFFIC_MODE in out) raw=$(echo $line|cut -d';' -f10) ;; in) raw=$(echo $line|cut -d';' -f9) ;; total) raw=$(echo $line|cut -d';' -f11) ;; max)
-        rx=$(echo $line|cut -d';' -f9); tx=$(echo $line|cut -d';' -f10); [ $rx -gt $tx ] && raw=$rx || raw=$tx ;; esac
+    line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>/dev/null)
+    case $TRAFFIC_MODE in out) raw=$(echo $line|cut -d';' -f10) ;; in) raw=$(echo $line|cut -d';' -f9) ;; total) raw=$(echo $line|cut -d';' -f11) ;; max) rx=$(echo $line|cut -d';' -f9); tx=$(echo $line|cut -d';' -f10); [[ $rx -gt $tx ]] && raw=$rx || raw=$tx ;; esac
     raw=${raw:-0}
-    local target_bytes=$(echo "$real_gb * 1024*1024*1024 / 1" | bc)
+    local target_bytes=$(echo "$real_gb * 1024*1024*1024" | bc | cut -d. -f1)
     local new_offset=$((raw - target_bytes))
     echo "$new_offset" > "$OFFSET_FILE"
-    echo "已将 offset 设为 $new_offset（当前周期显示 ≈${real_gb} GB）"
+    echo "已修正 offset → $new_offset（当前显示 ≈${real_gb} GB）"
 }
 
-# ==================== 配置初始化 ====================
 initial_config() {
-    echo "========== Telegram Bot Token =========="
-    read -p "Bot Token: " TG_BOT_TOKEN
-    echo "========== Chat ID =========="
-    read -p "Chat ID  : " TG_CHAT_ID
-    read -p "机器名称 [默认 $(hostname)]: " MACHINE_NAME; MACHINE_NAME=${MACHINE_NAME:-$(hostname)}
-    read -p "每日报告时间 (HH:MM) [默认 01:00]: " DAILY_REPORT_TIME; DAILY_REPORT_TIME=${DAILY_REPORT_TIME:-01:00}
-    read -p "VPS 到期日 (YYYY.MM.DD): " EXPIRE_DATE
+    echo "======================================"
+    echo "      修改 Telegram 配置"
+    echo "======================================"
+    echo
+    if [ -n "$TG_BOT_TOKEN" ]; then
+        local tshow="${TG_BOT_TOKEN:0:8}...${TG_BOT_TOKEN: -4}"
+
+        echo "请输入 Bot Token [当前: $tshow]: "
+    else
+        echo "请输入 Bot Token: "
+    fi
+    read -r new_token
+    [[ -z "$new_token" && -n "$TG_BOT_TOKEN" ]] && new_token="$TG_BOT_TOKEN"
+    while [ -z "$new_token" ]; do echo "不能为空！"; read -r new_token; done
+
+    if [ -n "$TG_CHAT_ID" ]; then
+        echo "请输入 Chat ID [当前: $TG_CHAT_ID]: "
+    else
+        echo "请输入 Chat ID: "
+    fi
+    read -r new_chat
+    [[ -z "$new_chat" && -n "$TG_CHAT_ID" ]] && new_chat="$TG_CHAT_ID"
+    while [ -z "$new_chat" ]; do echo "不能为空！"; read -r new_chat; done
+
+    echo "请输入机器名称 [当前: ${MACHINE_NAME:-未设置}]: "; read -r new_name; [[ -z "$new_name" ]] && new_name="${MACHINE_NAME:-$(hostname)}"
+    while [ -z "$new_name" ]; do read -r new_name; done
+
+    echo "请输入每日报告时间 (HH:MM) [当前: ${DAILY_REPORT_TIME:-01:00}]: "; read -r new_time
+    [[ -z "$new_time" ]] && new_time="${DAILY_REPORT_TIME:-01:00}"
+    while ! [[ $new_time =~ ^([0-1][0-9]|2[0-3]):[0-5][0-9]$ ]]; do echo "格式错误！"; read -r new_time; done
+
+    echo "请输入 VPS 到期日期 (YYYY.MM.DD) [当前: ${EXPIRE_DATE:-未设置}]: "; read -r new_expire
+    [[ -z "$new_expire" ]] && new_expire="$EXPIRE_DATE"
+    while ! [[ $new_expire =~ ^[0-9]{4}\.[0-1][0-9]\.[0-3][0-9]$ ]]; do echo "格式错误！"; read -r new_expire; done
+
+    TG_BOT_TOKEN="$new_token"; TG_CHAT_ID="$new_chat"; MACHINE_NAME="$new_name"; DAILY_REPORT_TIME="$new_time"; EXPIRE_DATE="$new_expire"
     write_config
-    echo "配置已保存！"
+    echo "Telegram 配置已更新成功！"
 }
 
 setup_cron() {
     (crontab -l 2>/dev/null | grep -v "$SCRIPT_PATH -cron"; echo "* * * * * $SCRIPT_PATH -cron") | crontab -
-    echo "Cron 已添加（每分钟检查）"
 }
 
-# ==================== 主菜单 ====================
+stop_service() {
+    crontab -l 2>/dev/null | grep -v "$SCRIPT_PATH -cron" | crontab -
+    echo "Telegram 定时任务已移除" | tee -a "$CRON_LOG"
+    exit 0
+}
+
 main() {
     check_running
-    [[ "$*" == *"-cron"* ]] && {
+
+    if [[ "$*" == *"-cron"* ]]; then
         read_config || exit 0
         [[ $(date +%H:%M) == "$DAILY_REPORT_TIME" ]] && daily_report
         exit 0
-    }
-
-    if ! read_config; then
-        echo "首次运行，进入配置向导..."
-        initial_config
     fi
+
+    read_config || echo "首次运行请先选择 4 配置 Telegram"
     setup_cron
 
-    while :; do
+    while true; do
         clear
-        echo -e "${BLUE}========== Telegram 流量通知管理 ==========${PLAIN}"
-        echo -e "${GREEN}1.${PLAIN} 发送每日报告"
-        echo -e "${GREEN}2.${PLAIN} 发送测试消息"
-        echo -e "${GREEN}3.${PLAIN} 查看实时流量"
-        echo -e "${GREEN}4.${PLAIN} 修改配置"
-        echo -e "${GREEN}5.${PLAIN} 手动修正已用流量"
-        echo -e "${RED}6.${PLAIN} 停止服务（删除定时任务）"
-        echo -e "${WHITE}0.${PLAIN} 退出"
         echo -e "${BLUE}======================================${PLAIN}"
-        read -p "请选择 [0-6]: " choice
-        case $choice in
+        echo -e "${PURPLE}     Telegram 流量通知管理菜单${PLAIN}"
+        echo -e "${BLUE}======================================${PLAIN}"
+        echo -e "${GREEN}1.${PLAIN} 发送${YELLOW}每日报告${PLAIN}"
+        echo -e "${GREEN}2.${PLAIN} 发送${CYAN}测试消息${PLAIN}"
+        echo -e "${GREEN}3.${PLAIN} 打印${YELLOW}实时流量${PLAIN}"
+        echo -e "${GREEN}4.${PLAIN} 修改${PURPLE}配置${PLAIN}"
+        echo -e "${GREEN}5.${PLAIN} 设置${PURPLE}已用流量${PLAIN}"
+        echo -e "${RED}6.${PLAIN} 停止运行（移除定时任务）${PLAIN}"
+        echo -e "${WHITE}0.${PLAIN} 退出${PLAIN}"
+        echo -e "${BLUE}======================================${PLAIN}"
+        read -rp "请选择操作 [0-6]: " choice
+        echo
+        case "$choice" in
             1) daily_report ;;
             2) test_telegram ;;
             3) get_current_traffic ;;
             4) initial_config ;;
             5) flow_setting ;;
-            6) (crontab -l | grep -v "$SCRIPT_PATH -cron" | crontab -; echo "已停止") ; exit ;;
-            0) exit ;;
+            6) stop_service ;;
+            0) exit 0 ;;
+            *) echo "无效选项，请重新输入" ;;
         esac
-        read -p "按回车继续..."
+        read -rp "按 Enter 返回菜单..."
     done
 }
 
