@@ -137,7 +137,7 @@ daily_report() {
     
 🕒日期：${today}
 ${remain_emoji}剩余：${diff_days}天
-📅周期：${start} 到 ${end}
+🔄周期：${start} 到 ${end}
 ⌛已用：${usage} GB
 🌐套餐：${limit}"
 }
