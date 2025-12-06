@@ -391,7 +391,7 @@ daily_report() {
     content=""
     content+="🕒日期：${today}\n"
     content+="${diff_emoji}剩余：${diff_days}\n"
-    content+="📅周期：${period_start} 到 ${period_end}\n"
+    content+="🔄周期：${period_start} 到 ${period_end}\n"
     content+="⌛已用：${current_usage} GB\n"
     content+="🌐套餐：${limit}"
 
