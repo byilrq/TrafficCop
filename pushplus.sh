@@ -386,7 +386,7 @@ daily_report() {
 
     # === 按你指定的 5 行格式拼接内容 ===
     local title content
-    title="🖥️ [${MACHINE_NAME}] 每日报告"
+    title="🎯 [${MACHINE_NAME}] 每日报告"
 
     content=""
     content+="🕒日期：${today}\n"
