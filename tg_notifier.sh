@@ -133,7 +133,7 @@ daily_report() {
         remain_emoji="🟡"
     fi
 
-    tg_send "🖥️ <b>[${MACHINE_NAME}]</b> 每日报告
+    tg_send "🎯 <b>[${MACHINE_NAME}]</b> 每日报告
     
 🕒日期：${today}
 ${remain_emoji}剩余：${diff_days}天
