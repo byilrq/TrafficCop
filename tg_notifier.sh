@@ -245,8 +245,7 @@ main() {
         echo -e "${GREEN}2.${PLAIN} 发送${CYAN}测试消息${PLAIN}"
         echo -e "${GREEN}3.${PLAIN} 打印${YELLOW}实时流量${PLAIN}"
         echo -e "${GREEN}4.${PLAIN} 修改${PURPLE}配置${PLAIN}"
-        echo -e "${GREEN}5.${PLAIN} 设置${PURPLE}已用流量${PLAIN}"
-        echo -e "${RED}6.${PLAIN} 停止运行（移除定时任务）${PLAIN}"
+        echo -e "${RED}5.${PLAIN} 停止运行（移除定时任务）${PLAIN}"
         echo -e "${WHITE}0.${PLAIN} 退出${PLAIN}"
         echo -e "${BLUE}======================================${PLAIN}"
         read -rp "请选择操作 [0-6]: " choice
@@ -256,8 +255,7 @@ main() {
             2) test_telegram ;;
             3) get_current_traffic ;;
             4) initial_config ;;
-            5) flow_setting ;;
-            6) stop_service ;;
+            5) stop_service ;;
             0) exit 0 ;;
             *) echo "无效选项，请重新输入" ;;
         esac
