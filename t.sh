@@ -439,9 +439,6 @@ install_nodeseek_moniter() {
     read -p "按回车继续..."
 }
 # ======================================================
-# 手动设置已用流量
-# ======================================================
-# ======================================================
 # 手动设置已用流量（管理脚本版本）
 # ======================================================
 flow_setting() {
@@ -475,24 +472,49 @@ flow_setting() {
         return 1
     fi
 
-    # 获取当前累计字节数 raw_bytes
-    local line raw_bytes rx tx
+    local line raw_bytes rx tx real_bytes new_offset
     line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>&1 || echo "")
 
-    # vnstat 还没数据
-    if echo "$line" | grep -qi "Not enough data available yet"; then
-        echo "vnstat 数据尚未准备好，当前无法根据累计流量反推 offset。"
-        echo "请等待一段时间（产生一些流量）后再尝试。"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') flow_setting：vnstat 无数据，放弃修改 OFFSET_FILE" | tee -a "$log_file"
-        return 1
+    # 情况 A：vnstat 还没数据 -> 视为 VPS 首次创建，当前累计流量按 0 处理
+    if echo "$line" | grep -qiE "Not enough data available yet|No data\. Timestamp of last update is same"; then
+        echo "检测到 vnstat 尚无历史数据，视为首次创建 VPS。"
+        echo "将当前累计流量按 0 bytes 处理，根据你输入的 ${real_gb} GB 写入补偿值（可能为负数）。"
+
+        raw_bytes=0
+
+        # real_gb 转换为字节（1024^3）
+        real_bytes=$(echo "$real_gb * 1024 * 1024 * 1024" | bc | cut -d'.' -f1)
+
+        # 初始累计为 0，则 offset = 0 - real_bytes（允许为负数）
+        new_offset=$((raw_bytes - real_bytes))
+
+        echo "$new_offset" > "$offset_file"
+
+        echo "--------------------------------------"
+        echo "当前累计流量 raw_bytes : $raw_bytes bytes (按 0 处理)"
+        echo "设定本周期使用量       : $real_gb GB"
+        echo "新的 offset            : $new_offset"
+        echo "（后续统计：已用 = 当前累计 - offset，将从 ${real_gb}GB 附近开始往上增长）"
+        echo "--------------------------------------"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') flow_setting：vnstat 无历史数据，按 raw_bytes=0 处理，设置 OFFSET_FILE=$new_offset（对应本周期已用 $real_gb GB）" | tee -a "$log_file"
+        return 0
     fi
 
+    # 情况 B：其它异常
     if [ -z "$line" ]; then
         echo "vnstat 输出为空，无法计算 raw_bytes。"
         echo "$(date '+%Y-%m-%d %H:%M:%S') flow_setting：vnstat 输出为空，放弃修改 OFFSET_FILE" | tee -a "$log_file"
         return 1
     fi
 
+    # 如果没有 ';'，说明不是正常的 --oneline b 数据格式
+    if ! echo "$line" | grep -q ';'; then
+        echo "vnstat 输出不是有效的 oneline 数据：$line"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') flow_setting：vnstat oneline 非数据输出($line)，放弃修改 OFFSET_FILE" | tee -a "$log_file"
+        return 1
+    fi
+
+    # 情况 C：vnstat 有正常数据，按模式取 raw_bytes
     raw_bytes=0
     case $TRAFFIC_MODE in
         out)
@@ -532,7 +554,6 @@ flow_setting() {
     fi
 
     # real_gb 转换为字节（1024^3）
-    local real_bytes new_offset
     real_bytes=$(echo "$real_gb * 1024 * 1024 * 1024" | bc | cut -d'.' -f1)
 
     # 得到新的 offset（允许为负数，用于补历史用量）
