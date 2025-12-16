@@ -71,40 +71,6 @@ tg_send() {
         >/dev/null
 }
 
-
-
-# ============================================
-# 获取最新 chat_id（你先私聊机器人发一条消息再来取）
-# ============================================
-get_chat_id() {
-    echo -e "${BLUE}======================================${PLAIN}"
-    echo -e "${PURPLE} 获取个人 Chat ID${PLAIN}"
-    echo -e "${BLUE}======================================${PLAIN}"
-    echo -e "步骤：\n1) 打开 Telegram，找到你的 Bot\n2) 点 Start 并发送一条消息（例如 hi）\n3) 回到这里执行获取\n"
-
-    if [ -z "$TG_BOT_TOKEN" ]; then
-        echo -e "${RED}❌ 还未设置 TG_BOT_TOKEN，请先执行 1) 安装/修改配置${PLAIN}"
-        return 1
-    fi
-
-    local resp
-    resp=$(curl -s "https://api.telegram.org/bot${TG_BOT_TOKEN}/getUpdates?limit=5")
-
-    local chat_id
-    chat_id=$(echo "$resp" | grep -oE '"chat":\{"id":[-0-9]+' | tail -n1 | grep -oE '[-0-9]+')
-
-    if [ -z "$chat_id" ]; then
-        echo -e "${RED}❌ 未获取到 chat_id。请确认你已私聊机器人并发送过消息。${PLAIN}"
-        echo -e "${YELLOW}调试信息（getUpdates返回）：${PLAIN}"
-        echo "$resp"
-        return 1
-    fi
-
-    echo -e "${GREEN}✅ 获取到 Chat ID：${chat_id}${PLAIN}"
-    echo -e "${CYAN}你可以把它写入配置 TG_PUSH_CHAT_ID。${PLAIN}"
-    echo ""
-}
-
 # ============================================
 # 初始化配置（支持保留旧值）
 # ============================================
@@ -643,7 +609,6 @@ main_menu() {
         echo -e "${GREEN}4.${PLAIN} 推送测试消息（Telegram）"
         echo -e "${GREEN}5.${PLAIN} 手动更新&打印"
         echo -e "${GREEN}6.${PLAIN} 清除cron任务"
-        echo -e "${GREEN}7.${PLAIN} 获取个人ChatID（需先私聊Bot发消息）"
         echo -e "${WHITE}0.${PLAIN} 退出"
         echo -e "${BLUE}======================================${PLAIN}"
         read -rp "请选择操作 [0-7]: " choice
@@ -655,7 +620,6 @@ main_menu() {
             4) test_notification; echo -e "${GREEN}操作完成。${PLAIN}" ;;
             5) manual_fresh; echo -e "${GREEN}手动更新完成。${PLAIN}" ;;
             6) stop_cron; echo -e "${GREEN}停止cron任务完成。${PLAIN}" ;;
-            7) get_chat_id; echo -e "${GREEN}操作完成。${PLAIN}" ;;
             0) exit 0 ;;
             *) echo "无效选项"; echo -e "${GREEN}操作完成。${PLAIN}" ;;
         esac
