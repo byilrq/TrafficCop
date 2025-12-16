@@ -352,14 +352,15 @@ manual_push() {
         local now_t
         now_t=$(fmt_time)
 
-        local push_text=""
-        for msg in "${matched_msgs[@]}"; do
-            local one_line
-            one_line=$(echo "$msg" | tr '\r\n' ' ' | awk '{$1=$1;print}')
-            push_text+="🎯Node\n"
-            push_text+="🕒时间: ${now_t}\n"
-            push_text+="🌐标题:${one_line}\n\n"
-        done
+local push_text=""
+for msg in "${matched_msgs[@]}"; do
+    local one_line
+    one_line=$(echo "$msg" | tr '\r\n' ' ' | awk '{$1=$1;print}')
+
+    push_text+=$'🎯Node\n'
+    push_text+=$'🕒时间: '"${now_t}"$'\n'
+    push_text+=$'🌐标题: '"${one_line}"$'\n\n'
+done
 
         tg_send "" "$push_text"
         echo "✅ 推送完成（匹配 ${#matched_msgs[@]} 条）"
@@ -438,20 +439,22 @@ auto_push() {
             continue
         fi
 
-        local now_t
-        now_t=$(fmt_time)
 
-        local push_text=""
-        for msg in "${new_matched_msgs[@]}"; do
-            local one_line
-            one_line=$(echo "$msg" | tr '\r\n' ' ' | awk '{$1=$1;print}')
-            push_text+="🎯Node\n"
-            push_text+="🕒时间: ${now_t}\n"
-            push_text+="🌐标题:${one_line}\n\n"
-        done
 
-        tg_send "" "$push_text"
+local now_t
+now_t=$(fmt_time)
 
+local push_text=""
+for msg in "${new_matched_msgs[@]}"; do
+    local one_line
+    one_line=$(echo "$msg" | tr '\r\n' ' ' | awk '{$1=$1;print}')
+
+    push_text+=$'🎯Node\n'
+    push_text+=$'🕒时间: '"${now_t}"$'\n'
+    push_text+=$'🌐标题: '"${one_line}"$'\n\n'
+done
+
+tg_send "$push_text"
         for msg in "${new_matched_msgs[@]}"; do
             echo "$msg" >> "$SENT_FILE"
         done
