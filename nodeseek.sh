@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================
-# Telegram Channel → nodeseek 监控脚本 v1.1 (Telegram个人推送版)
-# 作者：by / 更新时间：2025-12-15
+# Telegram Channel → nodeseek 监控脚本 v1.2 (Telegram个人推送版 / 美化推送格式)
+# 作者：by / 更新时间：2025-12-16
 # ============================================
 
 # 强制 UTF-8 locale
@@ -52,14 +52,25 @@ EOF
 }
 
 # ============================================
+# 时间格式：2025.12.08.10:40
+# ============================================
+fmt_time() {
+    date '+%Y.%m.%d.%H:%M'
+}
+
+# ============================================
 # Telegram 推送（个人私聊 chat_id）
 # ============================================
 tg_send() {
     local title="$1"
     local content="$2"
 
-    # 纯文本最稳，不用 parse_mode，避免 Markdown 转义问题
-    local msg="${title}\n\n${content}"
+    local msg=""
+    if [[ -n "$title" ]]; then
+        msg="${title}\n\n${content}"
+    else
+        msg="${content}"
+    fi
 
     curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
         -d "chat_id=${TG_PUSH_CHAT_ID}" \
@@ -85,7 +96,6 @@ get_chat_id() {
     local resp
     resp=$(curl -s "https://api.telegram.org/bot${TG_BOT_TOKEN}/getUpdates?limit=5")
 
-    # 从返回里提取 chat.id（优先取最后一个出现的）
     local chat_id
     chat_id=$(echo "$resp" | grep -oE '"chat":\{"id":[-0-9]+' | tail -n1 | grep -oE '[-0-9]+')
 
@@ -112,7 +122,6 @@ initial_config() {
     echo "提示：按 Enter 保留当前配置，输入新值将覆盖原配置。"
     echo ""
 
-    # 若存在旧配置则读取
     if [ -f "$CONFIG_FILE" ]; then
         # shellcheck disable=SC1090
         source "$CONFIG_FILE"
@@ -152,7 +161,6 @@ initial_config() {
         done
     fi
 
-    # --- 写入cron任务设置（可选：但这里保持原逻辑）---
     setup_cron
 
     # --- 关键词过滤设置 ---
@@ -165,7 +173,6 @@ initial_config() {
             echo "请输入关键词（多个关键词用 , 分隔），示例：上架,库存,补货"
             read -rp "输入关键词: " new_keywords
 
-            # 允许空值清空
             if [[ -z "$new_keywords" ]]; then
                 KEYWORDS=""
                 echo "关键词已清空。"
@@ -187,7 +194,6 @@ initial_config() {
         echo "保持原有关键词：${KEYWORDS:-未设置}"
     fi
 
-    # 保存配置
     TG_BOT_TOKEN="$new_bot_token"
     TG_PUSH_CHAT_ID="$new_chat_id"
     TG_CHANNELS="$new_channels"
@@ -259,7 +265,6 @@ manual_fresh() {
         local STATE_FILE="$WORK_DIR/last_${ch}.txt"
         echo -e "${CYAN}频道：$ch${PLAIN}"
 
-        # 抓取频道 HTML
         local html
         html=$(curl -s --compressed -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" "https://t.me/s/${ch}")
         if [[ -z "$html" ]]; then
@@ -269,7 +274,6 @@ manual_fresh() {
             continue
         fi
 
-        # 提取最近10条消息
         local raw_messages=()
         while IFS= read -r line; do
             raw_messages+=("$line")
@@ -291,7 +295,6 @@ manual_fresh() {
             }
         ' | tail -n 10)
 
-        # 提取标题
         local messages=()
         for raw in "${raw_messages[@]}"; do
             local title
@@ -306,10 +309,8 @@ manual_fresh() {
             continue
         fi
 
-        # 更新缓存文件
         printf "%s\n" "${messages[@]}" > "$STATE_FILE"
 
-        # 打印结果
         echo -e "${GREEN}最新10条消息标题（最新在下）：${PLAIN}"
         local i=1
         for msg in "${messages[@]}"; do
@@ -325,7 +326,7 @@ manual_fresh() {
 }
 
 # ============================================
-# 手动推送10条新的信息（按关键词匹配）
+# 手动推送10条新的信息（按关键词匹配）—— 美化格式
 # ============================================
 manual_push() {
     read_config || return
@@ -388,20 +389,25 @@ manual_push() {
             continue
         fi
 
+        local now_t
+        now_t=$(fmt_time)
+
         local push_text=""
-        local i=1
         for msg in "${matched_msgs[@]}"; do
-            push_text+="${i}) ${msg}\n\n"
-            ((i++))
+            local one_line
+            one_line=$(echo "$msg" | tr '\r\n' ' ' | awk '{$1=$1;print}')
+            push_text+="🎯Node\n"
+            push_text+="🕒时间: ${now_t}\n"
+            push_text+="🌐标题:${one_line}\n\n"
         done
 
-        tg_send "关键词匹配推送 [$ch]" "$push_text"
+        tg_send "" "$push_text"
         echo "✅ 推送完成（匹配 ${#matched_msgs[@]} 条）"
     done
 }
 
 # ============================================
-# 自动推送（用于 cron）—— 匹配关键词且只推送一次
+# 自动推送（用于 cron）—— 匹配关键词且只推送一次（美化格式）
 # ============================================
 auto_push() {
     read_config || return
@@ -472,14 +478,19 @@ auto_push() {
             continue
         fi
 
+        local now_t
+        now_t=$(fmt_time)
+
         local push_text=""
-        local i=1
         for msg in "${new_matched_msgs[@]}"; do
-            push_text+="${i}) ${msg}\n\n"
-            ((i++))
+            local one_line
+            one_line=$(echo "$msg" | tr '\r\n' ' ' | awk '{$1=$1;print}')
+            push_text+="🎯Node\n"
+            push_text+="🕒时间: ${now_t}\n"
+            push_text+="🌐标题:${one_line}\n\n"
         done
 
-        tg_send "Node" "$push_text"
+        tg_send "" "$push_text"
 
         for msg in "${new_matched_msgs[@]}"; do
             echo "$msg" >> "$SENT_FILE"
@@ -491,17 +502,18 @@ auto_push() {
 }
 
 # ============================================
-# 测试 Telegram 推送
+# 测试 Telegram 推送（美化格式）
 # ============================================
 test_notification() {
     read_config || return
     echo -e "${CYAN}正在发送 Telegram 测试推送...${PLAIN}"
-    local now_time
-    now_time=$(date '+%Y-%m-%d %H:%M:%S')
-    local test_title="🔔 [监控测试消息]"
-    local test_content="🕒 时间：${now_time}\n📢 监控频道：${TG_CHANNELS:-未设置}\n\n如果你看到此消息，说明 Telegram Bot 推送配置正常 ✅"
 
-    tg_send "$test_title" "$test_content"
+    local now_t
+    now_t=$(fmt_time)
+
+    local test_content="🎯Node\n🕒时间: ${now_t}\n🌐标题: 这是来自脚本的测试推送（看到说明配置正常 ✅）\n"
+
+    tg_send "" "$test_content"
     echo -e "${GREEN}✅ Telegram 测试推送已发送（请到私聊查看）${PLAIN}"
     echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ Telegram 测试推送已发送" >> "$LOG_FILE"
 }
@@ -580,7 +592,6 @@ fi
 # 设置定时任务（cron每分钟触发一次，脚本内部每30秒循环）
 # ============================================
 setup_cron() {
-    # 不强制 read_config：允许首次配置时也能写入 cron
     local entry="* * * * * /usr/bin/flock -n /tmp/nodeseek.lock $SCRIPT_PATH -cron"
 
     echo "🛠 正在检查 nodeseek 定时任务..."
