@@ -563,58 +563,50 @@ fi
 # 设置定时任务（cron每分钟触发一次，脚本内部每30秒循环）
 # ============================================
 setup_cron() {
-    local entry1="* * * * * /root/TrafficCop/traffic.sh --run"
-    local entry2="* * * * * /root/TrafficCop/tg_notifier.sh -cron"
+    local entry="* * * * * /root/TrafficCop/nodeseek.sh -cron"
 
-    echo "🛠 正在检查并更新 cron 任务..."
+    echo "🛠 正在检查并更新 nodeseek 定时任务（去掉 flock）..."
 
-    # 1) 先把旧的 nodeseek flock 方案干掉（如果存在）
+    # 读取现有 crontab，删除旧的 flock 形式 & 旧的 nodeseek 形式（防止重复）
     crontab -l 2>/dev/null \
-        | grep -v "nodeseek.sh -cron" \
         | grep -v "/usr/bin/flock -n /tmp/nodeseek.lock" \
-        > "$WORK_DIR/crontab.tmp" 2>/dev/null || true
+        | grep -v "nodeseek.sh -cron" \
+        > /tmp/cron.nodeseek.tmp || true
 
-    # 2) 去掉可能已存在的同名 entry（防止重复）
-    grep -vF "$entry1" "$WORK_DIR/crontab.tmp" > "$WORK_DIR/crontab.tmp2" 2>/dev/null || true
-    mv "$WORK_DIR/crontab.tmp2" "$WORK_DIR/crontab.tmp"
-
-    grep -vF "$entry2" "$WORK_DIR/crontab.tmp" > "$WORK_DIR/crontab.tmp2" 2>/dev/null || true
-    mv "$WORK_DIR/crontab.tmp2" "$WORK_DIR/crontab.tmp"
-
-    # 3) 追加你指定的两条
+    # 追加新的直跑形式
     {
-        cat "$WORK_DIR/crontab.tmp"
-        echo "$entry1"
-        echo "$entry2"
+        cat /tmp/cron.nodeseek.tmp
+        echo "$entry"
     } | crontab -
 
-    rm -f "$WORK_DIR/crontab.tmp"
+    rm -f /tmp/cron.nodeseek.tmp
 
-    echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ cron 已更新为指定形式。" | tee -a "$CRON_LOG"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ nodeseek cron 已更新为：$entry" | tee -a "$CRON_LOG"
 }
+
 
 
 # ============================================
 # 关闭定时任务
 # ============================================
 stop_cron() {
-    echo -e "${YELLOW}⏳ 正在停止定时任务...${PLAIN}"
+    echo -e "${YELLOW}⏳ 正在停止 nodeseek 定时任务...${PLAIN}"
 
-    # 1) 只杀 tg_notifier 的后台循环（如果它自己会 while true）
-    pkill -f "tg_notifier.sh -cron" 2>/dev/null
-    pkill -f "traffic.sh --run" 2>/dev/null
+    # 杀掉后台循环进程
+    pkill -f "nodeseek.sh -cron" 2>/dev/null
 
-    # 2) 从 crontab 中移除两条
+    # 从 crontab 中移除 nodeseek 相关任务（包含 flock 版和直跑版）
     crontab -l 2>/dev/null \
-        | grep -v "/root/TrafficCop/traffic.sh --run" \
-        | grep -v "/root/TrafficCop/tg_notifier.sh -cron" \
+        | grep -v "/usr/bin/flock -n /tmp/nodeseek.lock" \
+        | grep -v "nodeseek.sh -cron" \
         | crontab - 2>/dev/null
 
-    echo -e "${GREEN}✔ 已移除 cron 任务：traffic.sh / tg_notifier.sh${PLAIN}"
+    echo -e "${GREEN}✔ 已从 crontab 中移除 nodeseek 定时任务${PLAIN}"
 
     systemctl restart cron 2>/dev/null || service cron restart 2>/dev/null
-    echo -e "${GREEN}✔ 定时任务已停止${PLAIN}"
+    echo -e "${GREEN}✔ nodeseek 定时监控已完全停止${PLAIN}"
 }
+
 
 
 # ============================================
