@@ -288,6 +288,9 @@ manual_fresh() {
 # ============================================
 # 手动推送10条新的信息（按关键词匹配）—— 美化格式
 # ============================================
+# ============================================
+# 手动推送10条新的信息（按关键词匹配）—— 同测试推送格式
+# ============================================
 manual_push() {
     read_config || return
 
@@ -308,6 +311,7 @@ manual_push() {
             continue
         fi
 
+        # 读取缓存
         local messages=()
         while IFS= read -r line; do messages+=("$line"); done < "$STATE_FILE"
 
@@ -352,23 +356,27 @@ manual_push() {
         local now_t
         now_t=$(fmt_time)
 
-local push_text=""
-for msg in "${matched_msgs[@]}"; do
-    local one_line
-    one_line=$(echo "$msg" | tr '\r\n' ' ' | awk '{$1=$1;print}')
+        # 拼接为“测试推送”同款格式（多条匹配会连续输出多段）
+        local push_text=""
+        for msg in "${matched_msgs[@]}"; do
+            local one_line
+            one_line=$(echo "$msg" | tr '\r\n' ' ' | awk '{$1=$1;print}')
 
-    push_text+=$'🎯Node\n'
-    push_text+=$'🕒时间: '"${now_t}"$'\n'
-    push_text+=$'🌐标题: '"${one_line}"$'\n\n'
-done
+            push_text+=$'🎯Node\n'
+            push_text+=$'🕒时间: '"${now_t}"$'\n'
+            push_text+=$'🌐标题: '"${one_line}"$'\n\n'
+        done
 
-        tg_send "" "$push_text"
+        tg_send "$push_text"
         echo "✅ 推送完成（匹配 ${#matched_msgs[@]} 条）"
     done
 }
 
 # ============================================
 # 自动推送（用于 cron）—— 匹配关键词且只推送一次（美化格式）
+# ============================================
+# ============================================
+# 自动推送（用于 cron）—— 匹配关键词且只推送一次（同测试推送格式）
 # ============================================
 auto_push() {
     read_config || return
@@ -395,6 +403,7 @@ auto_push() {
             continue
         fi
 
+        # 读取最近10条消息
         local messages=()
         while IFS= read -r line; do messages+=("$line"); done < "$STATE_FILE"
 
@@ -439,22 +448,23 @@ auto_push() {
             continue
         fi
 
+        local now_t
+        now_t=$(fmt_time)
 
+        # 拼接为“测试推送”同款格式
+        local push_text=""
+        for msg in "${new_matched_msgs[@]}"; do
+            local one_line
+            one_line=$(echo "$msg" | tr '\r\n' ' ' | awk '{$1=$1;print}')
 
-local now_t
-now_t=$(fmt_time)
+            push_text+=$'🎯Node\n'
+            push_text+=$'🕒时间: '"${now_t}"$'\n'
+            push_text+=$'🌐标题: '"${one_line}"$'\n\n'
+        done
 
-local push_text=""
-for msg in "${new_matched_msgs[@]}"; do
-    local one_line
-    one_line=$(echo "$msg" | tr '\r\n' ' ' | awk '{$1=$1;print}')
+        tg_send "$push_text"
 
-    push_text+=$'🎯Node\n'
-    push_text+=$'🕒时间: '"${now_t}"$'\n'
-    push_text+=$'🌐标题: '"${one_line}"$'\n\n'
-done
-
-tg_send "$push_text"
+        # 写入已推送记录
         for msg in "${new_matched_msgs[@]}"; do
             echo "$msg" >> "$SENT_FILE"
         done
@@ -463,6 +473,7 @@ tg_send "$push_text"
         echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] 📩 自动推送成功（${#new_matched_msgs[@]} 条）" >> "$LOG_FILE"
     done
 }
+
 
 # ============================================
 # 测试 Telegram 推送（美化格式）
