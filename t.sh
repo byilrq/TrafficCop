@@ -64,6 +64,12 @@ install_tg_notifier() {
     read -p "按回车键继续..."
 }
 
+# 安装let监控通知  
+install_let() {
+    echo -e "${CYAN}功能暂未开发...${NC}"
+    read -p "按回车键继续..."
+}
+
 # 安装PushPlus通知
 install_pushplus() {
     echo -e "${CYAN}正在安装PushPlus通知功能...${NC}"
@@ -260,8 +266,6 @@ update_all_scripts() {
     read -p "按回车键继续..."
 }
 
-
-# 读取当前总流量  Traffic_all 函数：读取当前流量并打印，用于测试统计和记录
 # 读取当前总流量（不再 source trafficcop.sh，直接读配置+vnstat）
 Traffic_all() {
     local config_file="$WORK_DIR/traffic_config.txt"
@@ -376,40 +380,7 @@ Traffic_all() {
 }
 
 
-# 监控vpschannel
-install_vps_moniter() {
-    echo -e "${CYAN}正在安装 VPS 监控功能...${NC}"
 
-    if curl -s --head "$REPO_URL/vps_moniter.sh" | grep "200" >/dev/null; then
-        install_script "vps_moniter.sh"
-        echo -e "${GREEN}已从仓库中下载最新 vps_moniter.sh！${NC}"
-    else
-        echo -e "${YELLOW}从仓库下载失败，使用本地文件...${NC}"
-        if [ -f "vps_moniter.sh" ]; then
-            cp "vps_moniter.sh" "$WORK_DIR/vps_moniter.sh"
-            chmod +x "$WORK_DIR/vps_moniter.sh"
-        else
-            echo -e "${RED}本地 vps_moniter.sh 文件不存在！${NC}"
-            read -p "按回车键继续..."
-            return
-        fi
-    fi
-
-    run_script "$WORK_DIR/vps_moniter.sh"
-    ret=$?
-    case $ret in
-        99)
-            echo "VPS监控已停止。"
-            ;;
-        0)
-            echo "VPS监控功能安装完成！"
-            ;;
-        *)
-            echo "VPS监控脚本执行异常（返回码：$ret）"
-            ;;
-    esac
-    read -p "按回车键继续..."
-}    
 # ======================================================
 # 安装 / 管理 nodeseek 监控通知
 # ======================================================
@@ -582,7 +553,7 @@ show_main_menu() {
     echo -e "${YELLOW}1) 安装/管理流量监控${NC}"
     echo -e "${YELLOW}2) 安装/管理Telegram通知${NC}"
     echo -e "${YELLOW}3) 安装/管理PushPlus通知${NC}"
-    echo -e "${YELLOW}4) 安装/管理tg群监控通知${NC}"  
+    echo -e "${YELLOW}4) 安装/管理LET监控通知${NC}"  
     echo -e "${YELLOW}5) 安装/管理nodeseek监控通知${NC}"  
     echo -e "${YELLOW}6) 查看日志${NC}"
     echo -e "${YELLOW}7) 查看配置${NC}"
@@ -615,7 +586,7 @@ main() {
                 install_pushplus
                 ;;
             4)
-                install_vps_moniter
+                install_let
                 ;;      
             5)
                 install_nodeseek_moniter
