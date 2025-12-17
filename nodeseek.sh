@@ -1,4 +1,3 @@
-```bash
 #!/bin/bash
 # ============================================
 # Telegram Channel → nodeseek 监控脚本 v1.3 (Telegram个人推送版 / 美化推送格式)
@@ -534,4 +533,3 @@ main_menu() {
     done
 }
 main_menu
-```
