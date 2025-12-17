@@ -54,11 +54,31 @@ fmt_time() {
 # ============================================
 tg_send() {
     local content="$1"
-    curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+    if [ -z "$content" ]; then
+        echo -e "${RED}❌ 推送内容为空${PLAIN}"
+        return 1
+    fi
+    local response
+    response=$(curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
         -d "chat_id=${TG_PUSH_CHAT_ID}" \
         --data-urlencode "text=${content}" \
         -d "disable_web_page_preview=true" \
-        >/dev/null
+        -w "\n%{http_code}")
+    
+    local http_code=$(echo "$response" | tail -n1)
+    local result=$(echo "$response" | head -n-1)
+    
+    if [ "$http_code" = "200" ]; then
+        echo -e "${GREEN}✅ Telegram 推送成功${PLAIN}"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ Telegram 推送成功" >> "$LOG_FILE"
+        return 0
+    else
+        echo -e "${RED}❌ Telegram 推送失败 (HTTP: $http_code)${PLAIN}"
+        echo "响应: $result"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') ❌ Telegram 推送失败 (HTTP: $http_code)" >> "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') 响应: $result" >> "$LOG_FILE"
+        return 1
+    fi
 }
 # ============================================
 # 初始化配置（支持保留旧值）
@@ -105,7 +125,6 @@ initial_config() {
             read -rp "请输入频道名或URL: " new_channels
         done
     fi
-    setup_cron
     # --- 关键词过滤设置 ---
     echo ""
     echo "当前关键词：${KEYWORDS:-未设置}"
@@ -323,7 +342,7 @@ manual_push() {
         fi
         local now_t
         now_t=$(fmt_time)
-        # 拼接为“测试推送”同款格式（多条匹配会连续输出多段）
+        # 拼接为"测试推送"同款格式（多条匹配会连续输出多段）
         local push_text=""
         for msg in "${matched_msgs[@]}"; do
             local one_line
@@ -338,9 +357,6 @@ manual_push() {
 }
 # ============================================
 # 自动推送（用于 cron）—— 匹配关键词且只推送一次（美化格式）
-# ============================================
-# ============================================
-# 自动推送（用于 cron）—— 匹配关键词且只推送一次（同测试推送格式）
 # ============================================
 auto_push() {
     read_config || return
@@ -400,7 +416,7 @@ auto_push() {
         fi
         local now_t
         now_t=$(fmt_time)
-        # 拼接为“测试推送”同款格式
+        # 拼接为"测试推送"同款格式
         local push_text=""
         for msg in "${new_matched_msgs[@]}"; do
             local one_line
@@ -430,6 +446,48 @@ test_notification() {
     tg_send "$test_content"
     echo -e "${GREEN}✅ Telegram 测试推送已发送（请到私聊查看）${PLAIN}"
     echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ Telegram 测试推送已发送" >> "$LOG_FILE"
+}
+# ============================================
+# 获取 Chat ID
+# ============================================
+get_chat_id() {
+    read_config || return
+    echo -e "${CYAN}获取 Chat ID 说明：${PLAIN}"
+    echo "1. 首先，给你的 Bot 发送一条消息（任意内容）"
+    echo "2. 然后执行以下步骤获取 Chat ID"
+    echo ""
+    read -rp "按 Enter 继续..."
+    
+    local response
+    response=$(curl -s "https://api.telegram.org/bot${TG_BOT_TOKEN}/getUpdates")
+    
+    if echo "$response" | grep -q '"ok":true'; then
+        echo -e "${GREEN}✅ 获取更新成功${PLAIN}"
+        echo "最新消息记录："
+        echo "----------------------------------------"
+        echo "$response" | python3 -m json.tool 2>/dev/null || echo "$response"
+        echo "----------------------------------------"
+        
+        # 提取最新 chat_id
+        local chat_id
+        chat_id=$(echo "$response" | grep -o '"chat":{"id":[^,]*' | tail -1 | grep -o '[0-9]\+')
+        
+        if [ -n "$chat_id" ]; then
+            echo -e "${GREEN}✅ 检测到 Chat ID: $chat_id${PLAIN}"
+            echo "是否更新配置文件中的 Chat ID？"
+            read -rp "输入 Y 更新，其他键跳过: " choice
+            if [[ "$choice" =~ ^[Yy]$ ]]; then
+                TG_PUSH_CHAT_ID="$chat_id"
+                write_config
+                echo -e "${GREEN}✅ Chat ID 已更新为: $chat_id${PLAIN}"
+            fi
+        else
+            echo -e "${RED}❌ 未检测到 Chat ID，请先给 Bot 发送消息${PLAIN}"
+        fi
+    else
+        echo -e "${RED}❌ 获取更新失败${PLAIN}"
+        echo "响应: $response"
+    fi
 }
 # ============================================
 # 日志轮转（保留最近 7 天归档）
@@ -536,7 +594,8 @@ main_menu() {
         echo -e "${GREEN}3.${PLAIN} 推送最新消息（关键词匹配）"
         echo -e "${GREEN}4.${PLAIN} 推送测试消息（Telegram）"
         echo -e "${GREEN}5.${PLAIN} 手动更新&打印"
-        echo -e "${GREEN}6.${PLAIN} 清除cron任务"
+        echo -e "${GREEN}6.${PLAIN} 获取 Chat ID"
+        echo -e "${GREEN}7.${PLAIN} 清除cron任务"
         echo -e "${WHITE}0.${PLAIN} 退出"
         echo -e "${BLUE}======================================${PLAIN}"
         read -rp "请选择操作 [0-7]: " choice
@@ -547,7 +606,8 @@ main_menu() {
             3) manual_push; echo -e "${GREEN}操作完成。${PLAIN}" ;;
             4) test_notification; echo -e "${GREEN}操作完成。${PLAIN}" ;;
             5) manual_fresh; echo -e "${GREEN}手动更新完成。${PLAIN}" ;;
-            6) stop_cron; echo -e "${GREEN}停止cron任务完成。${PLAIN}" ;;
+            6) get_chat_id; echo -e "${GREEN}操作完成。${PLAIN}" ;;
+            7) stop_cron; echo -e "${GREEN}停止cron任务完成。${PLAIN}" ;;
             0) exit 0 ;;
             *) echo "无效选项"; echo -e "${GREEN}操作完成。${PLAIN}" ;;
         esac
