@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================
-# Telegram Channel → nodeseek 监控脚本 v1.2 (Telegram个人推送版 / 美化推送格式)
-# 作者：by / 更新时间：2025-12-16
+# Telegram Channel → nodeseek 监控脚本 v1.1 (Telegram个人推送版)
+# 作者：by / 更新时间：2025-12-15
 # ============================================
 
 # 强制 UTF-8 locale
@@ -52,23 +52,53 @@ EOF
 }
 
 # ============================================
-# 时间格式：2025.12.08.10:40
-# ============================================
-fmt_time() {
-    date '+%Y.%m.%d.%H:%M'
-}
-
-# ============================================
 # Telegram 推送（个人私聊 chat_id）
 # ============================================
 tg_send() {
-    local content="$1"
+    local title="$1"
+    local content="$2"
+
+    # 纯文本最稳，不用 parse_mode，避免 Markdown 转义问题
+    local msg="${title}\n\n${content}"
 
     curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
         -d "chat_id=${TG_PUSH_CHAT_ID}" \
-        --data-urlencode "text=${content}" \
+        --data-urlencode "text=${msg}" \
         -d "disable_web_page_preview=true" \
         >/dev/null
+}
+
+# ============================================
+# 获取最新 chat_id（你先私聊机器人发一条消息再来取）
+# ============================================
+get_chat_id() {
+    echo -e "${BLUE}======================================${PLAIN}"
+    echo -e "${PURPLE} 获取个人 Chat ID${PLAIN}"
+    echo -e "${BLUE}======================================${PLAIN}"
+    echo -e "步骤：\n1) 打开 Telegram，找到你的 Bot\n2) 点 Start 并发送一条消息（例如 hi）\n3) 回到这里执行获取\n"
+
+    if [ -z "$TG_BOT_TOKEN" ]; then
+        echo -e "${RED}❌ 还未设置 TG_BOT_TOKEN，请先执行 1) 安装/修改配置${PLAIN}"
+        return 1
+    fi
+
+    local resp
+    resp=$(curl -s "https://api.telegram.org/bot${TG_BOT_TOKEN}/getUpdates?limit=5")
+
+    # 从返回里提取 chat.id（优先取最后一个出现的）
+    local chat_id
+    chat_id=$(echo "$resp" | grep -oE '"chat":\{"id":[-0-9]+' | tail -n1 | grep -oE '[-0-9]+')
+
+    if [ -z "$chat_id" ]; then
+        echo -e "${RED}❌ 未获取到 chat_id。请确认你已私聊机器人并发送过消息。${PLAIN}"
+        echo -e "${YELLOW}调试信息（getUpdates返回）：${PLAIN}"
+        echo "$resp"
+        return 1
+    fi
+
+    echo -e "${GREEN}✅ 获取到 Chat ID：${chat_id}${PLAIN}"
+    echo -e "${CYAN}你可以把它写入配置 TG_PUSH_CHAT_ID。${PLAIN}"
+    echo ""
 }
 
 # ============================================
@@ -82,6 +112,7 @@ initial_config() {
     echo "提示：按 Enter 保留当前配置，输入新值将覆盖原配置。"
     echo ""
 
+    # 若存在旧配置则读取
     if [ -f "$CONFIG_FILE" ]; then
         # shellcheck disable=SC1090
         source "$CONFIG_FILE"
@@ -121,6 +152,7 @@ initial_config() {
         done
     fi
 
+    # --- 写入cron任务设置（可选：但这里保持原逻辑）---
     setup_cron
 
     # --- 关键词过滤设置 ---
@@ -133,6 +165,7 @@ initial_config() {
             echo "请输入关键词（多个关键词用 , 分隔），示例：上架,库存,补货"
             read -rp "输入关键词: " new_keywords
 
+            # 允许空值清空
             if [[ -z "$new_keywords" ]]; then
                 KEYWORDS=""
                 echo "关键词已清空。"
@@ -154,6 +187,7 @@ initial_config() {
         echo "保持原有关键词：${KEYWORDS:-未设置}"
     fi
 
+    # 保存配置
     TG_BOT_TOKEN="$new_bot_token"
     TG_PUSH_CHAT_ID="$new_chat_id"
     TG_CHANNELS="$new_channels"
@@ -213,35 +247,6 @@ print_latest() {
 }
 
 # ============================================
-# 日志保留：仅保留最近 24 小时（按行首时间戳过滤）
-# 要求：每行以 "YYYY-MM-DD HH:MM:SS" 开头
-# ============================================
-keep_log_last_24h() {
-    local file="$1"
-    [[ -f "$file" ]] || return 0
-
-    local cutoff
-    cutoff=$(date -d "24 hours ago" +%s 2>/dev/null) || return 0
-
-    awk -v cutoff="$cutoff" '
-    function to_epoch(dt, cmd, epoch) {
-        cmd = "date -d \"" dt "\" +%s 2>/dev/null"
-        cmd | getline epoch
-        close(cmd)
-        return epoch + 0
-    }
-    {
-        dt = substr($0, 1, 19)
-        # 不符合时间格式的行（空行/分隔线等）直接保留
-        if (dt !~ /^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$/) {
-            print $0
-            next
-        }
-        if (to_epoch(dt) >= cutoff) print $0
-    }' "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
-}
-
-# ============================================
 # 手动刷新10条新的信息
 # ============================================
 manual_fresh() {
@@ -254,6 +259,7 @@ manual_fresh() {
         local STATE_FILE="$WORK_DIR/last_${ch}.txt"
         echo -e "${CYAN}频道：$ch${PLAIN}"
 
+        # 抓取频道 HTML
         local html
         html=$(curl -s --compressed -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" "https://t.me/s/${ch}")
         if [[ -z "$html" ]]; then
@@ -263,6 +269,7 @@ manual_fresh() {
             continue
         fi
 
+        # 提取最近10条消息
         local raw_messages=()
         while IFS= read -r line; do
             raw_messages+=("$line")
@@ -284,6 +291,7 @@ manual_fresh() {
             }
         ' | tail -n 10)
 
+        # 提取标题
         local messages=()
         for raw in "${raw_messages[@]}"; do
             local title
@@ -298,8 +306,10 @@ manual_fresh() {
             continue
         fi
 
+        # 更新缓存文件
         printf "%s\n" "${messages[@]}" > "$STATE_FILE"
 
+        # 打印结果
         echo -e "${GREEN}最新10条消息标题（最新在下）：${PLAIN}"
         local i=1
         for msg in "${messages[@]}"; do
@@ -311,14 +321,11 @@ manual_fresh() {
         echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] 最新消息已更新" >> "$LOG_FILE"
     done
 
-    # ✅ 每次更新后做一次 24 小时日志保留
-    keep_log_last_24h "$LOG_FILE"
-
     echo -e "${GREEN}✅ 所有频道已手动更新并打印完成。${PLAIN}"
 }
 
 # ============================================
-# 手动推送10条新的信息（按关键词匹配）—— 同测试推送格式
+# 手动推送10条新的信息（按关键词匹配）
 # ============================================
 manual_push() {
     read_config || return
@@ -368,9 +375,9 @@ manual_push() {
 
             if [[ $matched -eq 1 ]]; then
                 matched_msgs+=("$msg")
-                echo "${idx}) ${msg} --匹配：${matched_kw}"
+                echo "${idx}) ${msg}  --匹配：${matched_kw}"
             else
-                echo "${idx}) ${msg} --不匹配"
+                echo "${idx}) ${msg}  --不匹配"
             fi
         done
 
@@ -381,26 +388,20 @@ manual_push() {
             continue
         fi
 
-        local now_t
-        now_t=$(fmt_time)
-
         local push_text=""
+        local i=1
         for msg in "${matched_msgs[@]}"; do
-            local one_line
-            one_line=$(echo "$msg" | tr '\r\n' ' ' | awk '{$1=$1;print}')
-
-            push_text+=$'🎯Node\n'
-            push_text+=$'🕒时间: '"${now_t}"$'\n'
-            push_text+=$'🌐标题: '"${one_line}"$'\n\n'
+            push_text+="${i}) ${msg}\n\n"
+            ((i++))
         done
 
-        tg_send "$push_text"
+        tg_send "关键词匹配推送 [$ch]" "$push_text"
         echo "✅ 推送完成（匹配 ${#matched_msgs[@]} 条）"
     done
 }
 
 # ============================================
-# 自动推送（用于 cron）—— 匹配关键词且只推送一次（同测试推送格式）
+# 自动推送（用于 cron）—— 匹配关键词且只推送一次
 # ============================================
 auto_push() {
     read_config || return
@@ -471,20 +472,14 @@ auto_push() {
             continue
         fi
 
-        local now_t
-        now_t=$(fmt_time)
-
         local push_text=""
+        local i=1
         for msg in "${new_matched_msgs[@]}"; do
-            local one_line
-            one_line=$(echo "$msg" | tr '\r\n' ' ' | awk '{$1=$1;print}')
-
-            push_text+=$'🎯Node\n'
-            push_text+=$'🕒时间: '"${now_t}"$'\n'
-            push_text+=$'🌐标题: '"${one_line}"$'\n\n'
+            push_text+="${i}) ${msg}\n\n"
+            ((i++))
         done
 
-        tg_send "$push_text"
+        tg_send "Node" "$push_text"
 
         for msg in "${new_matched_msgs[@]}"; do
             echo "$msg" >> "$SENT_FILE"
@@ -493,29 +488,22 @@ auto_push() {
         echo "📨 [$ch] 自动推送成功（${#new_matched_msgs[@]} 条）"
         echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] 📩 自动推送成功（${#new_matched_msgs[@]} 条）" >> "$LOG_FILE"
     done
-
-    # ✅ 自动推送也顺便清理一次 24小时日志
-    keep_log_last_24h "$LOG_FILE"
 }
 
 # ============================================
-# 测试 Telegram 推送（美化格式）
-# 修复：tg_send 只接收 1 个参数
+# 测试 Telegram 推送
 # ============================================
 test_notification() {
     read_config || return
     echo -e "${CYAN}正在发送 Telegram 测试推送...${PLAIN}"
+    local now_time
+    now_time=$(date '+%Y-%m-%d %H:%M:%S')
+    local test_title="🔔 [监控测试消息]"
+    local test_content="🕒 时间：${now_time}\n📢 监控频道：${TG_CHANNELS:-未设置}\n\n如果你看到此消息，说明 Telegram Bot 推送配置正常 ✅"
 
-    local now_t
-    now_t=$(fmt_time)
-
-    local test_content="🎯Node\n🕒时间: ${now_t}\n🌐标题: 这是来自脚本的测试推送（看到说明配置正常 ✅）\n"
-
-    tg_send "$test_content"
+    tg_send "$test_title" "$test_content"
     echo -e "${GREEN}✅ Telegram 测试推送已发送（请到私聊查看）${PLAIN}"
     echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ Telegram 测试推送已发送" >> "$LOG_FILE"
-
-    keep_log_last_24h "$LOG_FILE"
 }
 
 # ============================================
@@ -565,8 +553,7 @@ if [[ "$1" == "-cron" ]]; then
         }
 
         trim_file "$CRON_LOG"
-        # ✅ nodeseek.log 改为按时间保留 24 小时（不再按行数裁剪）
-        keep_log_last_24h "$LOG_FILE"
+        trim_file "$LOG_FILE"
         trim_file "$WORK_DIR/sent_nodeseekc.txt"
 
         {
@@ -593,6 +580,7 @@ fi
 # 设置定时任务（cron每分钟触发一次，脚本内部每30秒循环）
 # ============================================
 setup_cron() {
+    # 不强制 read_config：允许首次配置时也能写入 cron
     local entry="* * * * * /usr/bin/flock -n /tmp/nodeseek.lock $SCRIPT_PATH -cron"
 
     echo "🛠 正在检查 nodeseek 定时任务..."
@@ -621,6 +609,7 @@ setup_cron() {
 # ============================================
 stop_cron() {
     echo -e "${YELLOW}⏳ 正在停止 nodeseek 定时任务...${PLAIN}"
+
     pkill -f "nodeseek.sh -cron" 2>/dev/null
 
     if crontab -l 2>/dev/null | grep -q "nodeseek.sh -cron"; then
@@ -649,6 +638,7 @@ main_menu() {
         echo -e "${GREEN}4.${PLAIN} 推送测试消息（Telegram）"
         echo -e "${GREEN}5.${PLAIN} 手动更新&打印"
         echo -e "${GREEN}6.${PLAIN} 清除cron任务"
+        echo -e "${GREEN}7.${PLAIN} 获取个人ChatID（需先私聊Bot发消息）"
         echo -e "${WHITE}0.${PLAIN} 退出"
         echo -e "${BLUE}======================================${PLAIN}"
         read -rp "请选择操作 [0-7]: " choice
@@ -660,6 +650,7 @@ main_menu() {
             4) test_notification; echo -e "${GREEN}操作完成。${PLAIN}" ;;
             5) manual_fresh; echo -e "${GREEN}手动更新完成。${PLAIN}" ;;
             6) stop_cron; echo -e "${GREEN}停止cron任务完成。${PLAIN}" ;;
+            7) get_chat_id; echo -e "${GREEN}操作完成。${PLAIN}" ;;
             0) exit 0 ;;
             *) echo "无效选项"; echo -e "${GREEN}操作完成。${PLAIN}" ;;
         esac
