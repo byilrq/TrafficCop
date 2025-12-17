@@ -1,3 +1,4 @@
+```bash
 #!/bin/bash
 # ============================================
 # Telegram Channel → nodeseek 监控脚本 v1.2 (Telegram个人推送版 / 美化推送格式)
@@ -427,7 +428,7 @@ test_notification() {
     local now_t
     now_t=$(fmt_time)
     local test_content="🎯Node\n🕒时间: ${now_t}\n🌐标题: 这是来自脚本的测试推送（看到说明配置正常 ✅）\n"
-    tg_send "" "$test_content"
+    tg_send "$test_content"
     echo -e "${GREEN}✅ Telegram 测试推送已发送（请到私聊查看）${PLAIN}"
     echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ Telegram 测试推送已发送" >> "$LOG_FILE"
 }
@@ -555,3 +556,4 @@ main_menu() {
     done
 }
 main_menu
+```
