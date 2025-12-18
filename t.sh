@@ -60,7 +60,7 @@ install_tg_notifier() {
     echo -e "${CYAN}正在安装Telegram通知功能...${NC}"
     install_script "tg_push.sh"
     run_script "$WORK_DIR/tg_push.sh"
-    echo -e "${GREEN}Telegram通知功能安装完成！${NC}"
+    echo -e "${GREEN}tg_push.sh执行完毕！！${NC}"
     read -p "按回车键继续..."
 }
 
@@ -72,39 +72,14 @@ install_let() {
 
 # 安装PushPlus通知
 install_pushplus() {
+
     echo -e "${CYAN}正在安装PushPlus通知功能...${NC}"
-    
-    # 检查pushplus.sh是否在仓库中，如果不在，使用本地的
-    if curl -s --head "$REPO_URL/pushplus.sh" | grep "HTTP/2 200\|HTTP/1.1 200" > /dev/null; then
-        install_script "pushplus.sh"
-        echo -e "${RED} 已从仓库中下载最新pushplus.sh文件！${NC}"
-    else
-        echo -e "${YELLOW}从仓库下载失败，使用本地文件...${NC}"
-        # 复制当前目录下的pushplus_.sh到工作目录
-        if [ -f "pushplus.sh" ]; then
-            cp "pushplus.sh" "$WORK_DIR/pushplus.sh"
-            chmod +x "$WORK_DIR/pushplus_.sh"
-        else
-            echo -e "${RED}本地pushplus.sh文件不存在！${NC}"
-            read -p "按回车键继续..."
-            return
-        fi
-    fi
+    install_script "pushplus.shh"
     run_script "$WORK_DIR/pushplus.sh"
-        ret=$?
-    case $ret in
-        99)
-            echo "PushPlus通知功能已停止。"
-            ;;
-        0)
-            echo "PushPlus通知功能安装完成！"
-            ;;
-        *)
-            echo "PushPlus通知脚本执行异常（返回码：$ret）"
-            ;;
-    esac
+    echo -e "${GREEN} pushplus.sh执行完毕！${NC}"
     read -p "按回车键继续..."
 }
+
 
 # 查看日志
 view_logs() {
