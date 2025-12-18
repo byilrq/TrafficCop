@@ -361,7 +361,7 @@ main() {
         echo -e "${GREEN}2.${PLAIN} 发送${CYAN}测试消息${PLAIN}"
         echo -e "${GREEN}3.${PLAIN} 打印${YELLOW}实时流量${PLAIN}"
         echo -e "${GREEN}4.${PLAIN} 修改${PURPLE}配置${PLAIN}"
-        echo -e "${RED}5.${PLAIN} 停止运行（移除定时任务）${PLAIN}"
+        echo -e "${RED}5.${PLAIN} 移除定时任务${PLAIN}"
         echo -e "${WHITE}0.${PLAIN} 退出${PLAIN}"
         echo -e "${BLUE}======================================${PLAIN}"
         read -rp "请选择操作 [0-6]: " choice
