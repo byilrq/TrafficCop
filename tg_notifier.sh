@@ -1,8 +1,8 @@
 #!/bin/bash
 # ============================================
-# Telegram 流量监控通知脚本（完美复刻 pushplus 风格 + 最新消息格式）
+# Telegram 流量监控通知脚本（pushplus 同款 cron 实现）
 # 文件名：/root/TrafficCop/tg_notifier.sh
-# 版本：best-2025-12-17
+# 版本：best-2025-12-18 (cron aligned with pushplus.sh)
 # ============================================
 
 export TZ='Asia/Shanghai'
@@ -16,9 +16,6 @@ SCRIPT_PATH="$WORK_DIR/tg_notifier.sh"
 
 TRAFFIC_CONFIG="$WORK_DIR/traffic_config.txt"
 OFFSET_FILE="$WORK_DIR/traffic_offset.dat"
-
-# cron 锁（防止重复实例）
-LOCK_FILE="/tmp/tg_notifier.lock"
 
 # 颜色
 RED="\033[31m"; GREEN="\033[32m"; YELLOW="\033[33m"; BLUE="\033[34m"
@@ -45,24 +42,17 @@ log_cron() {
     trim_cron_log
 }
 
-# ==================== 防并发（cron/手动都适用） ====================
-acquire_lock_or_exit() {
-    # 需要系统有 /usr/bin/flock
-    if command -v flock >/dev/null 2>&1; then
-        exec 200>"$LOCK_FILE"
-        flock -n 200 || {
-            log_cron "已有实例运行（flock锁占用），退出。"
-            exit 0
-        }
-    else
-        # 兼容：没有 flock 则退化为 pidof 检查
-        if pidof -x "$(basename "$0")" -o $$ >/dev/null 2>&1; then
-            log_cron "已有实例运行（pidof检测），退出。"
-            exit 0
-        fi
+# ============================================
+# 防止重复运行（与 pushplus.sh 一致：pidof）
+# ============================================
+check_running() {
+    if pidof -x "$(basename "$0")" -o $$ >/dev/null 2>&1; then
+        log_cron "已有实例运行，退出。"
+        exit 1
     fi
 }
 
+# ==================== 配置读取/保存 ====================
 read_config() {
     [ ! -s "$CONFIG_FILE" ] && return 1
     # shellcheck disable=SC1090
@@ -90,6 +80,7 @@ read_traffic_config() {
     return 0
 }
 
+# ==================== 周期计算 ====================
 get_period_start_date() {
     local y m d
     y=$(date +%Y); m=$(date +%m); d=$(date +%d)
@@ -122,6 +113,7 @@ get_period_end_date() {
     esac
 }
 
+# ==================== 流量读取（vnstat + offset） ====================
 get_traffic_usage() {
     local offset raw=0 line rx tx
     offset=$(cat "$OFFSET_FILE" 2>/dev/null || echo 0)
@@ -202,6 +194,7 @@ ${remain_emoji}剩余：${diff_days}天
 🌐套餐：${limit}"
 }
 
+# ==================== 终端打印实时流量 ====================
 get_current_traffic() {
     read_traffic_config || { echo "请先运行 trafficcop.sh 初始化"; return; }
     local usage start
@@ -220,6 +213,7 @@ get_current_traffic() {
     echo "========================================"
 }
 
+# ==================== 修正 offset ====================
 flow_setting() {
     echo "请输入本周期实际已用流量（GB）:"
     read -r real_gb
@@ -251,6 +245,7 @@ flow_setting() {
     echo "已修正 offset → $new_offset（当前显示 ≈${real_gb} GB）"
 }
 
+# ==================== 配置向导 ====================
 initial_config() {
     echo "======================================"
     echo "      修改 Telegram 配置"
@@ -307,34 +302,53 @@ initial_config() {
     echo "Telegram 配置已更新成功！"
 }
 
-# ==================== cron：每分钟触发一次（脚本内部判断时间点） ====================
+# ============================================
+# cron 定时任务（与 pushplus.sh 一致）
+# ============================================
 setup_cron() {
-    # 用 flock 防并发：避免重复实例造成日志狂刷
-    local cron_entry="* * * * * /usr/bin/flock -n ${LOCK_FILE} ${SCRIPT_PATH} -cron"
-
-    (crontab -l 2>/dev/null | grep -v "${SCRIPT_PATH} -cron" ; echo "$cron_entry") | crontab -
-    log_cron "已写入 cron：$cron_entry"
+    local entry="* * * * * $SCRIPT_PATH -cron"
+    (crontab -l 2>/dev/null | grep -v "$SCRIPT_PATH -cron" ; echo "$entry") | crontab -
+    log_cron "✅ Crontab 已更新：每分钟检查一次，按设定时间发送每日报告。"
 }
 
 stop_service() {
-    crontab -l 2>/dev/null | grep -v "${SCRIPT_PATH} -cron" | crontab -
+    crontab -l 2>/dev/null | grep -v "$SCRIPT_PATH -cron" | crontab -
     log_cron "Telegram 定时任务已移除"
     exit 0
 }
 
+# ==================== 主入口（cron 逻辑与 pushplus.sh 对齐） ====================
 main() {
-    acquire_lock_or_exit
+    # 与 pushplus.sh 一致：pidof 防重复
+    check_running
 
     # 启动日志（并自动裁剪）
     echo "----------------------------------------------" | tee -a "$CRON_LOG" >/dev/null
     log_cron "启动 Telegram 通知脚本"
 
     if [[ "$*" == *"-cron"* ]]; then
-        read_config || exit 0
-        [[ $(date +%H:%M) == "$DAILY_REPORT_TIME" ]] && daily_report
+        # Cron 模式：每分钟跑一次，只在指定时间发日报
+        if ! read_config; then
+            log_cron "Telegram 配置不完整，跳过 cron 执行。"
+            exit 1
+        fi
+
+        local current_time
+        current_time=$(date +%H:%M)
+        log_cron "cron 模式，当前时间: $current_time，设定报告时间: $DAILY_REPORT_TIME"
+
+        if [ "$current_time" = "$DAILY_REPORT_TIME" ]; then
+            # 每天第一次命中时清空日志（与 pushplus.sh 一致）
+            echo "$(date '+%Y-%m-%d %H:%M:%S') : 时间匹配，开始发送每日报告。" >"$CRON_LOG"
+            daily_report
+        else
+            log_cron "时间未到每日报告点，不发送。"
+        fi
+
         exit 0
     fi
 
+    # 非 cron：交互菜单模式
     read_config || echo "首次运行请先选择 4 配置 Telegram"
     setup_cron
 
