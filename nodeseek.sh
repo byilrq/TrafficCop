@@ -447,27 +447,49 @@ test_notification() {
 # ============================================
 # 日志轮转（保留最近 7 天归档）
 # ============================================
+# ============================================
+# 日志轮转（按天：只保留“当天”日志，跨天自动归档并清空）
+# 说明：
+# 1) nodeseek.log / nodeseek_cron.log 只保留当天内容
+# 2) 跨天时自动归档为 .YYYY-MM-DD，并清空新一天日志
+# 3) 归档只保留最近 7 天（可改）
+# ============================================
 log_rotate() {
-    local log_file="$CRON_LOG"
-    local flag_file="$WORK_DIR/log_clean.flag"
+    local KEEP_DAYS=7
+
+    # 需要按天维护的日志文件
+    local files=("$LOG_FILE" "$CRON_LOG")
+
     local today
     today=$(date +%Y-%m-%d)
 
-    if [[ -f "$flag_file" && "$(cat "$flag_file")" == "$today" ]]; then
-        return
-    fi
+    for f in "${files[@]}"; do
+        # 确保文件存在
+        [[ -f "$f" ]] || touch "$f"
 
-    echo "🔥 开始日志轮转：删除 7 天前的日志文件..." >> "$CRON_LOG"
-    find "$WORK_DIR" -name "*.log.*" -mtime +7 -delete
+        # 找出该日志最后一次写入的日期
+        local last_day
+        last_day=$(date -r "$f" +%Y-%m-%d 2>/dev/null || echo "$today")
 
-    if [[ -f "$log_file" ]]; then
-        mv "$log_file" "${log_file}.${today}"
-        touch "$log_file"
-    fi
+        # 如果跨天：归档昨天日志 -> 清空当天日志
+        if [[ "$last_day" != "$today" ]]; then
+            local archive="${f}.${last_day}"
+            # 防止重复覆盖：如果 archive 已存在，则追加一个时间后缀
+            if [[ -f "$archive" ]]; then
+                archive="${archive}.$(date +%H%M%S)"
+            fi
+            mv "$f" "$archive" 2>/dev/null || {
+                # mv 失败就拷贝再清空兜底
+                cp -f "$f" "$archive" 2>/dev/null
+            }
+            : > "$f"
+        fi
+    done
 
-    echo "$today" > "$flag_file"
-    echo "✔ 日志轮转完成" >> "$CRON_LOG"
+    # 清理归档：只保留最近 KEEP_DAYS 天
+    find "$WORK_DIR" -maxdepth 1 -type f \( -name "nodeseek.log.*" -o -name "nodeseek_cron.log.*" \) -mtime +"$KEEP_DAYS" -delete 2>/dev/null || true
 }
+
 
 # ============================================
 # cron 模式：每20秒执行一次 manual_fresh + auto_push
@@ -476,7 +498,6 @@ log_rotate() {
 # 2) sleep 补偿，周期更稳定接近 20 秒
 # ============================================
 if [[ "$1" == "-cron" ]]; then
-    # 内置锁（cron 行里不写 flock，但脚本内部保证单实例）
     LOCK_FILE="$WORK_DIR/nodeseek.lock"
     exec 200>"$LOCK_FILE"
     flock -n 200 || exit 0
@@ -486,6 +507,9 @@ if [[ "$1" == "-cron" ]]; then
 
     while true; do
         start_ts=$(date +%s)
+
+        # ✅ 每轮先按天轮转，保证 nodeseek.log / nodeseek_cron.log 只保留当天
+        log_rotate
 
         trim_file() {
             local file="$1"
