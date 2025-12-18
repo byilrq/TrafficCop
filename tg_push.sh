@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================
 # Telegram 流量监控通知脚本（pushplus 同款 cron 实现）
-# 文件名：/root/TrafficCop/tg_notifier.sh
+# 文件名：/root/TrafficCop/tg_push.sh
 # 版本：best-2025-12-18 (cron aligned with pushplus.sh)
 # ============================================
 
@@ -12,7 +12,7 @@ mkdir -p "$WORK_DIR"
 
 CONFIG_FILE="$WORK_DIR/telegram_config.txt"
 CRON_LOG="$WORK_DIR/telegram_cron.log"
-SCRIPT_PATH="$WORK_DIR/tg_notifier.sh"
+SCRIPT_PATH="$WORK_DIR/tg_push.sh"
 
 TRAFFIC_CONFIG="$WORK_DIR/traffic_config.txt"
 OFFSET_FILE="$WORK_DIR/traffic_offset.dat"
