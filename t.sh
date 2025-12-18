@@ -58,8 +58,8 @@ install_monitor() {
 # 安装Telegram通知
 install_tg_notifier() {
     echo -e "${CYAN}正在安装Telegram通知功能...${NC}"
-    install_script "tg_notifier.sh"
-    run_script "$WORK_DIR/tg_notifier.sh"
+    install_script "tg_push.sh"
+    run_script "$WORK_DIR/tg_push.sh"
     echo -e "${GREEN}Telegram通知功能安装完成！${NC}"
     read -p "按回车键继续..."
 }
@@ -249,7 +249,7 @@ stop_all_services() {
 update_all_scripts() {
     echo -e "${CYAN}正在更新所有脚本到最新版本...${NC}"
     
-    local scripts=("trafficcop.sh" "tg_notifier.sh" "pushplus.sh" "nodeseek.sh" 
+    local scripts=("trafficcop.sh" "tg_push.sh" "pushplus.sh" "nodeseek.sh" 
 )
     
     for script in "${scripts[@]}"; do
