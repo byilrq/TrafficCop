@@ -10,8 +10,8 @@ export TZ='Asia/Shanghai'
 WORK_DIR="/root/TrafficCop"
 mkdir -p "$WORK_DIR"
 
-CONFIG_FILE="$WORK_DIR/telegram_config.txt"
-CRON_LOG="$WORK_DIR/telegram_cron.log"
+CONFIG_FILE="$WORK_DIR/tgpush_config.txt"
+CRON_LOG="$WORK_DIR/tgpush_cron.log"
 SCRIPT_PATH="$WORK_DIR/tg_push.sh"
 
 TRAFFIC_CONFIG="$WORK_DIR/traffic_config.txt"
