@@ -1,3 +1,2 @@
-1.ok 20251108
-2.ly的抓取ok.推送之类未调试。25.11 grok实现抓取完整消息，好用。
-3.node cron的任务删除程序是grok写的，很好用
+1.ok 20251219
+wget -N --no-check-certificate https://raw.githubusercontent.com/byilrq/TrafficCop/main/t.sh && bash t.sh
