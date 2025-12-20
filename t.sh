@@ -64,12 +64,6 @@ install_tg_notifier() {
     read -p "按回车键继续..."
 }
 
-# 安装let监控通知  
-install_let() {
-    echo -e "${CYAN}功能暂未开发...${NC}"
-    read -p "按回车键继续..."
-}
-
 # 安装PushPlus通知
 install_pushplus() {
 
@@ -224,7 +218,7 @@ stop_all_services() {
 update_all_scripts() {
     echo -e "${CYAN}正在更新所有脚本到最新版本...${NC}"
     
-    local scripts=("trafficcop.sh" "tg_push.sh" "pushplus.sh" "nodeseek.sh" 
+    local scripts=("trafficcop.sh" "tg_push.sh" "pushplus.sh" 
 )
     
     for script in "${scripts[@]}"; do
@@ -355,35 +349,6 @@ Traffic_all() {
 }
 
 
-
-# ======================================================
-# 安装 / 管理 nodeseek 监控通知
-# ======================================================
-install_nodeseek_moniter() {
-    echo -e "${CYAN}正在安装 nodeseek 监控脚本...${NC}"
-
-    local file="nodeseek.sh"
-    local url="https://raw.githubusercontent.com/byilrq/TrafficCop/main/nodeseek.sh"
-    local dest="$WORK_DIR/$file"
-
-    echo -e "${BLUE}➡ 下载 nodeseek.sh ...${NC}"
-    curl -fsSL "$url" -o "$dest"
-
-    if [[ $? -ne 0 ]]; then
-        echo -e "${RED}❌ 下载失败，请检查网络或 GitHub 链接。${NC}"
-        read -p "按回车继续..."
-        return
-    fi
-
-    chmod +x "$dest"
-    echo -e "${GREEN}✔ nodeseek.sh 安装完成${NC}"
-
-    echo -e "${CYAN}➡ 运行 nodeseek 配置管理...${NC}"
-    bash "$dest"
-
-    echo -e "${GREEN}✔ nodeseek 监控功能已启动！${NC}"
-    read -p "按回车继续..."
-}
 # ======================================================
 # 手动设置已用流量（管理脚本版本）
 # ======================================================
@@ -528,14 +493,12 @@ show_main_menu() {
     echo -e "${YELLOW}1) 安装/管理流量监控${NC}"
     echo -e "${YELLOW}2) 安装/管理Telegram通知${NC}"
     echo -e "${YELLOW}3) 安装/管理PushPlus通知${NC}"
-    echo -e "${YELLOW}4) 安装/管理LET监控通知${NC}"  
-    echo -e "${YELLOW}5) 安装/管理nodeseek监控通知${NC}"  
-    echo -e "${YELLOW}6) 查看日志${NC}"
-    echo -e "${YELLOW}7) 查看配置${NC}"
-    echo -e "${YELLOW}8) 查看已用流量${NC}" 
-    echo -e "${YELLOW}9) 设置已用流量${NC}" 
-    echo -e "${RED}10) 停止所有服务${NC}"
-    echo -e "${BLUE}11) 更新所有脚本${NC}"
+    echo -e "${YELLOW}4) 查看日志${NC}"
+    echo -e "${YELLOW}5) 查看配置${NC}"
+    echo -e "${YELLOW}6) 查看已用流量${NC}" 
+    echo -e "${YELLOW}7) 设置已用流量${NC}" 
+    echo -e "${RED}8) 停止所有服务${NC}"
+    echo -e "${BLUE}9) 更新所有脚本${NC}"
     echo -e "${YELLOW}0) 退出${NC}"
     echo -e "${PURPLE}====================================${NC}"
     echo ""
@@ -560,28 +523,23 @@ main() {
             3)
                 install_pushplus
                 ;;
+        
             4)
-                install_let
-                ;;      
-            5)
-                install_nodeseek_moniter
-                ;;  
-            6)
                 view_logs
                 ;;
-            7)
+            5)
                 view_config
                 ;;
-            8)
+            6)
                 Traffic_all
                 ;;    
-            9)
+            7)
                 flow_setting
                 ;;              
-            10)
+            8)
                 stop_all_services
                 ;;
-            11)
+            9)
                 update_all_scripts
                 ;;
 
