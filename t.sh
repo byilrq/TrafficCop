@@ -218,7 +218,7 @@ stop_all_services() {
 update_all_scripts() {
     echo -e "${CYAN}正在更新所有脚本到最新版本...${NC}"
     
-    local scripts=("trafficcop.sh" "tg_push.sh" "pushplus.sh" 
+    local scripts=("trafficcop.sh" "tg_push.sh" "pushplus.sh" "nodeseek.sh" 
 )
     
     for script in "${scripts[@]}"; do
