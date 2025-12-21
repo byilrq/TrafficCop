@@ -1,8 +1,8 @@
 #!/bin/bash
 # ============================================
-# NodeSeek 最新帖子 → Telegram 监控脚本 v2.0
-# (Telegram个人推送版 / 真换行推送 / 内置锁防重启 / 20秒稳定循环)
-# 基于你的 TG 频道脚本改造：监控 https://www.nodeseek.com/?sortBy=postTime
+# NodeSeek 最新帖子 → Telegram 监控脚本 v2.2
+# (Telegram个人推送版 / 真换行推送 / 内置锁防重启 / 可配置循环间隔 / RSS抓取)
+# 监控 RSS: https://rss.nodeseek.com/?sortBy=postTime
 # 更新时间：2025-12-21
 # ============================================
 
@@ -17,6 +17,9 @@ CONFIG_FILE="$WORK_DIR/nodeseek_config.txt"
 LOG_FILE="$WORK_DIR/nodeseek.log"
 CRON_LOG="$WORK_DIR/nodeseek_cron.log"
 SCRIPT_PATH="$WORK_DIR/nodeseek.sh"
+
+# 用于条件请求（If-Modified-Since）
+LAST_MOD_FILE="$WORK_DIR/.nodeseek_last_modified"
 
 # ================== 彩色定义 ==================
 RED="\033[31m"; GREEN="\033[32m"; YELLOW="\033[33m"
@@ -34,6 +37,9 @@ read_config() {
     # shellcheck disable=SC1090
     source "$CONFIG_FILE"
 
+    # 兼容旧配置：没写就默认 180 秒
+    [[ -z "$INTERVAL_SEC" ]] && INTERVAL_SEC=180
+
     if [ -z "$TG_BOT_TOKEN" ] || [ -z "$TG_PUSH_CHAT_ID" ] || [ -z "$NS_URL" ]; then
         echo -e "${RED}❌ 配置不完整（需 TG_BOT_TOKEN / TG_PUSH_CHAT_ID / NS_URL），请重新配置。${PLAIN}"
         return 1
@@ -47,6 +53,7 @@ TG_BOT_TOKEN="$TG_BOT_TOKEN"
 TG_PUSH_CHAT_ID="$TG_PUSH_CHAT_ID"
 NS_URL="$NS_URL"
 KEYWORDS="$KEYWORDS"
+INTERVAL_SEC="$INTERVAL_SEC"
 EOF
     echo -e "${GREEN}✅ 配置已保存到 $CONFIG_FILE${PLAIN}"
 }
@@ -106,15 +113,34 @@ initial_config() {
         [[ -z "$new_chat_id" ]] && new_chat_id="0"
     fi
 
-    # --- NodeSeek URL ---
+    # --- NodeSeek RSS URL ---
     local default_url="https://rss.nodeseek.com/?sortBy=postTime"
     if [ -n "$NS_URL" ]; then
-        read -rp "请输入要监控的 NodeSeek 页面URL [当前: $NS_URL] (回车默认最新帖): " new_url
+        read -rp "请输入要监控的 NodeSeek RSS URL [当前: $NS_URL] (回车默认最新帖): " new_url
         [[ -z "$new_url" ]] && new_url="$NS_URL"
     else
-        read -rp "请输入要监控的 NodeSeek 页面URL [默认: $default_url]: " new_url
+        read -rp "请输入要监控的 NodeSeek RSS URL [默认: $default_url]: " new_url
         [[ -z "$new_url" ]] && new_url="$default_url"
     fi
+
+    # --- 监控间隔（秒）---
+    echo ""
+    if [ -n "$INTERVAL_SEC" ]; then
+        read -rp "请输入监控间隔秒数 [当前: $INTERVAL_SEC]（建议>=60，最低20）: " new_interval
+        [[ -z "$new_interval" ]] && new_interval="$INTERVAL_SEC"
+    else
+        read -rp "请输入监控间隔秒数 [默认: 180]（建议>=60，最低20）: " new_interval
+        [[ -z "$new_interval" ]] && new_interval="180"
+    fi
+
+    # ✅ 校验：必须是数字，最低允许 20 秒
+    if ! [[ "$new_interval" =~ ^[0-9]+$ ]]; then
+        new_interval="180"
+    fi
+    if (( new_interval < 20 )); then
+        new_interval="20"
+    fi
+    INTERVAL_SEC="$new_interval"
 
     # 写入 cron（直跑，无 flock 包装）
     setup_cron
@@ -126,7 +152,7 @@ initial_config() {
 
     if [[ "$reset_kw" =~ ^[Yy]$ ]]; then
         while true; do
-            echo "请输入关键词（多个关键词用 , 分隔），示例：上架,库存,补货"
+            echo "请输入关键词（多个关键词用 , 分隔），示例：抽奖,evoxt,minibox"
             read -rp "输入关键词(留空=清空关键词): " new_keywords
 
             if [[ -z "$new_keywords" ]]; then
@@ -162,41 +188,64 @@ initial_config() {
 }
 
 # ============================================
-# HTML 解码（尽量覆盖常见实体）
+# 抓取 NodeSeek RSS（带 If-Modified-Since，减少风控概率）
+# 输出：把 RSS 内容写到 stdout
+# 返回：
+#   0 有内容（200）
+#   2 未更新（304）
+#   1 失败
 # ============================================
-html_decode() {
-    sed -e 's/&nbsp;/ /g' \
-        -e 's/&amp;/\&/g' \
-        -e 's/&lt;/</g' \
-        -e 's/&gt;/>/g' \
-        -e 's/&quot;/"/g' \
-        -e "s/&#39;/'/g" \
-        -e 's/&#036;/$/g' \
-        -e 's/&#64;/@/g'
-}
-
-# ============================================
-# 抓取 NodeSeek 页面 HTML（带 UA / gzip / 跟随跳转）
-# ============================================
-fetch_nodeseek_html() {
+fetch_nodeseek_rss() {
     local url="$1"
-    curl -s --compressed -L \
+    local tmp_h="$WORK_DIR/.tmp_headers"
+    local tmp_b="$WORK_DIR/.tmp_body"
+
+    local ims_arg=()
+    if [[ -s "$LAST_MOD_FILE" ]]; then
+        local lm
+        lm=$(cat "$LAST_MOD_FILE" 2>/dev/null | tr -d '\r\n')
+        [[ -n "$lm" ]] && ims_arg=(-H "If-Modified-Since: $lm")
+    fi
+
+    # 用 curl 同时拿 header + body，便于判断 200/304
+    local http_code
+    http_code=$(curl -sS --compressed -L \
+        -D "$tmp_h" -o "$tmp_b" \
         -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36" \
         -H "Accept: application/rss+xml, application/xml;q=0.9, */*;q=0.8" \
         -H "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8" \
-        "$url"
+        "${ims_arg[@]}" \
+        -w "%{http_code}" \
+        "$url" 2>>"$LOG_FILE")
+
+    if [[ "$http_code" == "304" ]]; then
+        return 2
+    fi
+
+    if [[ "$http_code" != "200" ]]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [NodeSeek] ❌ RSS请求失败 HTTP=$http_code" >> "$LOG_FILE"
+        return 1
+    fi
+
+    # 记录 Last-Modified，供下次 If-Modified-Since 使用
+    local new_lm
+    new_lm=$(grep -i '^last-modified:' "$tmp_h" | tail -n 1 | sed 's/^[Ll]ast-[Mm]odified:[ ]*//; s/\r//')
+    if [[ -n "$new_lm" ]]; then
+        echo "$new_lm" > "$LAST_MOD_FILE"
+    fi
+
+    cat "$tmp_b"
+    return 0
 }
 
 # ============================================
-# 从 NodeSeek 列表页提取最新帖子（id|title|url）
-# 说明：
-# - 尽量用“href=/post-xxxx-1”抽取
-# - 对 HTML 结构不做强依赖：只要页面里有 <a ... href="/post-123-1">标题</a> 就能工作
+# 从 RSS 提取最新帖子（id|title|url）
 # ============================================
 extract_posts() {
     local xml="$1"
 
-    if echo "$xml" | grep -qiE "Just a moment|Attention Required|Cloudflare|captcha"; then
+    # ✅ 只判断挑战页特征，避免误判
+    if echo "$xml" | grep -qiE "Just a moment|cf-turnstile|challenge-platform|captcha"; then
         echo "__BLOCKED__"
         return 0
     fi
@@ -245,7 +294,7 @@ extract_posts() {
           }
         }
       ' \
-      | head -n 30
+      | head -n 50
 }
 
 # ============================================
@@ -277,37 +326,53 @@ print_latest() {
 }
 
 # ============================================
-# 手动刷新：抓取最新帖子并更新缓存
+# 手动刷新：抓取最新帖子并更新缓存（合并追加，不会覆盖新帖）
 # ============================================
 manual_fresh() {
     read_config || return
 
     local STATE_FILE="$WORK_DIR/last_nodeseek.txt"
+    [[ -f "$STATE_FILE" ]] || touch "$STATE_FILE"
 
-    local html
-    html=$(fetch_nodeseek_html "$NS_URL")
-    if [[ -z "$html" ]]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') [NodeSeek] ❌ 获取HTML失败" >> "$LOG_FILE"
+    local xml
+    xml=$(fetch_nodeseek_rss "$NS_URL")
+    local rc=$?
+
+    if [[ $rc -eq 2 ]]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [NodeSeek] ℹ️ RSS未更新（304 Not Modified）" >> "$LOG_FILE"
+        return
+    fi
+
+    if [[ $rc -ne 0 || -z "$xml" ]]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [NodeSeek] ❌ 获取RSS失败或为空" >> "$LOG_FILE"
         return
     fi
 
     local posts
-    posts=$(extract_posts "$html")
+    posts=$(extract_posts "$xml")
 
     if [[ "$posts" == "__BLOCKED__" ]]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') [NodeSeek] ⚠️ 可能被风控/Cloudflare 拦截（Just a moment / captcha）" >> "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [NodeSeek] ⚠️ 可能被挑战页拦截（Just a moment / captcha）" >> "$LOG_FILE"
         return
     fi
 
     if [[ -z "$posts" ]]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') [NodeSeek] ❌ 未提取到帖子（页面结构变化或被拦截）" >> "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [NodeSeek] ❌ 未提取到帖子（RSS结构变化或被拦截）" >> "$LOG_FILE"
         return
     fi
 
-    # 写缓存（只保留最近 50 条，避免越来越大）
-    echo "$posts" | tac | awk '!seen[$1]++' | tac > "$STATE_FILE"  # 去重（按 id）
-    if (( $(wc -l < "$STATE_FILE") > 50 )); then
-        tail -n 50 "$STATE_FILE" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
+    # ✅ 合并：把“新抓到的posts”追加到旧缓存，再按 id 去重，保留最近 200 条
+    cat "$STATE_FILE" <(echo "$posts") \
+        | awk -F'|' 'NF>=3 && $1!="" {print $0}' \
+        | awk -F'|' '!seen[$1]++' \
+        > "${STATE_FILE}.tmp"
+
+    # 保留最近 200 条（按文件顺序：旧在上，新在下）
+    if (( $(wc -l < "${STATE_FILE}.tmp") > 200 )); then
+        tail -n 200 "${STATE_FILE}.tmp" > "$STATE_FILE"
+        rm -f "${STATE_FILE}.tmp"
+    else
+        mv "${STATE_FILE}.tmp" "$STATE_FILE"
     fi
 
     echo "$(date '+%Y-%m-%d %H:%M:%S') [NodeSeek] ✅ 最新帖子缓存已更新" >> "$LOG_FILE"
@@ -337,7 +402,7 @@ manual_push() {
     while IFS= read -r line; do lines+=("$line"); done < "$STATE_FILE"
 
     local total=${#lines[@]}
-    local start=$(( total > 10 ? total - 10 : 0 ))
+    local start=$(( total > 20 ? total - 20 : 0 ))
     local matched=()
 
     for ((i=start; i<total; i++)); do
@@ -384,7 +449,7 @@ manual_push() {
 }
 
 # ============================================
-# 自动推送（cron）—— 匹配关键词且只推送一次（真换行格式）
+# 自动推送（cron）—— 匹配关键词且只推送一次
 # ============================================
 auto_push() {
     read_config || return
@@ -410,13 +475,13 @@ auto_push() {
     while IFS= read -r line; do lines+=("$line"); done < "$STATE_FILE"
 
     local total=${#lines[@]}
-    local start=$(( total > 10 ? total - 10 : 0 ))
+    local start=$(( total > 30 ? total - 30 : 0 ))
     local new_matched=()
 
     local nowlog
     nowlog=$(date '+%Y-%m-%d %H:%M:%S')
     echo "$nowlog [NodeSeek] 当前关键词：$KEYWORDS" >> "$LOG_FILE"
-    echo "$nowlog [NodeSeek] 最新10条帖子匹配情况如下：" >> "$LOG_FILE"
+    echo "$nowlog [NodeSeek] 最新30条帖子匹配情况如下：" >> "$LOG_FILE"
 
     for ((i=start; i<total; i++)); do
         local id title url
@@ -471,7 +536,7 @@ auto_push() {
     tg_send "$push_text"
 
     for x in "${new_matched[@]}"; do
-        echo "$x" | awk -F'|' '{print $1}' >> "$SENT_FILE"   # 只存 ID，稳定不变
+        echo "$x" | awk -F'|' '{print $1}' >> "$SENT_FILE"
     done
 
     echo "$nowlog [NodeSeek] 📩 自动推送成功（${#new_matched[@]} 条）" >> "$LOG_FILE"
@@ -499,9 +564,6 @@ test_notification() {
 
 # ============================================
 # 日志清理（不归档）：每天 0 点只清空一次，保证日志体积
-# 说明：
-# 1) 跨天（到新的一天）时，清空 nodeseek.log / nodeseek_cron.log
-# 2) 用一个状态文件记录“上次清空日期”，避免脚本循环里重复清空
 # ============================================
 log_rotate() {
     local files=("$LOG_FILE" "$CRON_LOG")
@@ -513,7 +575,6 @@ log_rotate() {
 
     [[ -f "$state_file" ]] && last_reset=$(cat "$state_file" 2>/dev/null | tr -d '\r\n')
 
-    # 只有“进入新的一天”才清空一次
     if [[ "$last_reset" != "$today" ]]; then
         for f in "${files[@]}"; do
             [[ -f "$f" ]] || touch "$f"
@@ -524,7 +585,7 @@ log_rotate() {
 }
 
 # ============================================
-# cron 模式：每20秒执行一次 manual_fresh + auto_push
+# cron 模式：按配置间隔执行 manual_fresh + auto_push
 # 内置 flock 锁，避免重复启动
 # ============================================
 if [[ "$1" == "-cron" ]]; then
@@ -532,7 +593,16 @@ if [[ "$1" == "-cron" ]]; then
     exec 200>"$LOCK_FILE"
     flock -n 200 || exit 0
 
-    INTERVAL=20
+    # 从配置读取间隔（默认 180 秒，最低 20 秒）
+    read_config >/dev/null 2>&1 || true
+    INTERVAL=${INTERVAL_SEC:-180}
+    if ! [[ "$INTERVAL" =~ ^[0-9]+$ ]]; then
+        INTERVAL=180
+    fi
+    if (( INTERVAL < 20 )); then
+        INTERVAL=20
+    fi
+
     echo "$(date '+%Y-%m-%d %H:%M:%S') 🚀 定时任务已启动（每${INTERVAL}秒执行 manual_fresh + auto_push）" >> "$CRON_LOG"
 
     while true; do
@@ -542,7 +612,7 @@ if [[ "$1" == "-cron" ]]; then
 
         trim_file() {
             local file="$1"
-            local max_lines=120
+            local max_lines=200
             [[ -f "$file" ]] || return
             local cnt
             cnt=$(wc -l < "$file")
