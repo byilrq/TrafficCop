@@ -1,9 +1,6 @@
 #!/bin/bash
-
 # TrafficCop 管理器 - 交互式管理工具
 # 版本 1.0
-# 最后更新：2025-11.09
-
 
 # 颜色定义
 RED='\033[0;31m'
@@ -218,7 +215,7 @@ stop_all_services() {
 update_all_scripts() {
     echo -e "${CYAN}正在更新所有脚本到最新版本...${NC}"
     
-    local scripts=("trafficcop.sh" "tg_push.sh" "pushplus.sh" "nodeseek.sh" 
+    local scripts=("trafficcop.sh" "tg_push.sh" "pushplus.sh" "node.sh" 
 )
     
     for script in "${scripts[@]}"; do
@@ -481,16 +478,16 @@ flow_setting() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') flow_setting：手动设置 OFFSET_FILE=$new_offset（对应本周期已用 $real_gb GB）" | tee -a "$log_file"
 }
 # ======================================================
-# 安装 / 管理 nodeseek 监控通知
+# 安装 / 管理 node 监控通知
 # ======================================================
-install_nodeseek() {
-    echo -e "${CYAN}正在安装 nodeseek 监控脚本...${NC}"
+install_node() {
+    echo -e "${CYAN}正在安装 node 监控脚本...${NC}"
 
-    local file="nodeseek.sh"
-    local url="https://raw.githubusercontent.com/byilrq/TrafficCop/main/nodeseek.sh"
+    local file="node.sh"
+    local url="https://raw.githubusercontent.com/byilrq/TrafficCop/main/node.sh"
     local dest="$WORK_DIR/$file"
 
-    echo -e "${BLUE}➡ 下载 nodeseek.sh ...${NC}"
+    echo -e "${BLUE}➡ 下载 node.sh ...${NC}"
     curl -fsSL "$url" -o "$dest"
 
     if [[ $? -ne 0 ]]; then
@@ -500,12 +497,12 @@ install_nodeseek() {
     fi
 
     chmod +x "$dest"
-    echo -e "${GREEN}✔ nodeseek.sh 安装完成${NC}"
+    echo -e "${GREEN}✔ node.sh 安装完成${NC}"
 
-    echo -e "${CYAN}➡ 运行 nodeseek 配置管理...${NC}"
+    echo -e "${CYAN}➡ 运行 node 配置管理...${NC}"
     bash "$dest"
 
-    echo -e "${GREEN}✔ nodeseek 监控功能已启动！${NC}"
+    echo -e "${GREEN}✔ node 监控功能已启动！${NC}"
     read -p "按回车继续..."
 }
 
@@ -520,7 +517,7 @@ show_main_menu() {
     echo -e "${YELLOW}1) 安装/管理流量监控${NC}"
     echo -e "${YELLOW}2) 安装/管理Telegram通知${NC}"
     echo -e "${YELLOW}3) 安装/管理PushPlus通知${NC}"
-    echo -e "${YELLOW}4) 安装/管理nodeseek监控通知${NC}"  
+    echo -e "${YELLOW}4) 安装/管理node监控${NC}"  
     echo -e "${YELLOW}5) 查看日志${NC}"
     echo -e "${YELLOW}6) 查看配置${NC}"
     echo -e "${YELLOW}7) 查看已用流量${NC}" 
@@ -552,7 +549,7 @@ main() {
                 install_pushplus
                 ;;
             4)
-                install_nodeseek
+                install_node
                 ;;             
         
             5)
