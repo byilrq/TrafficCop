@@ -498,31 +498,29 @@ test_notification() {
 }
 
 # ============================================
-# 日志轮转（按天：只保留“当天”日志，跨天自动归档并清空）
+# 日志清理（不归档）：每天 0 点只清空一次，保证日志体积
+# 说明：
+# 1) 跨天（到新的一天）时，清空 nodeseek.log / nodeseek_cron.log
+# 2) 用一个状态文件记录“上次清空日期”，避免脚本循环里重复清空
 # ============================================
 log_rotate() {
-    local KEEP_DAYS=7
     local files=("$LOG_FILE" "$CRON_LOG")
-
     local today
     today=$(date +%Y-%m-%d)
 
-    for f in "${files[@]}"; do
-        [[ -f "$f" ]] || touch "$f"
-        local last_day
-        last_day=$(date -r "$f" +%Y-%m-%d 2>/dev/null || echo "$today")
+    local state_file="$WORK_DIR/.log_last_reset_day"
+    local last_reset=""
 
-        if [[ "$last_day" != "$today" ]]; then
-            local archive="${f}.${last_day}"
-            if [[ -f "$archive" ]]; then
-                archive="${archive}.$(date +%H%M%S)"
-            fi
-            mv "$f" "$archive" 2>/dev/null || { cp -f "$f" "$archive" 2>/dev/null; }
+    [[ -f "$state_file" ]] && last_reset=$(cat "$state_file" 2>/dev/null | tr -d '\r\n')
+
+    # 只有“进入新的一天”才清空一次
+    if [[ "$last_reset" != "$today" ]]; then
+        for f in "${files[@]}"; do
+            [[ -f "$f" ]] || touch "$f"
             : > "$f"
-        fi
-    done
-
-    find "$WORK_DIR" -maxdepth 1 -type f \( -name "nodeseek.log.*" -o -name "nodeseek_cron.log.*" \) -mtime +"$KEEP_DAYS" -delete 2>/dev/null || true
+        done
+        echo "$today" > "$state_file"
+    fi
 }
 
 # ============================================
