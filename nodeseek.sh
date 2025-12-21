@@ -1,8 +1,9 @@
 #!/bin/bash
 # ============================================
-# Telegram Channel → nodeseek 监控脚本 v1.3
+# NodeSeek 最新帖子 → Telegram 监控脚本 v2.0
 # (Telegram个人推送版 / 真换行推送 / 内置锁防重启 / 20秒稳定循环)
-# 作者：by / 更新时间：2025-12-17
+# 基于你的 TG 频道脚本改造：监控 https://www.nodeseek.com/?sortBy=postTime
+# 更新时间：2025-12-21
 # ============================================
 
 export LANG=C.UTF-8
@@ -33,8 +34,8 @@ read_config() {
     # shellcheck disable=SC1090
     source "$CONFIG_FILE"
 
-    if [ -z "$TG_BOT_TOKEN" ] || [ -z "$TG_PUSH_CHAT_ID" ] || [ -z "$TG_CHANNELS" ]; then
-        echo -e "${RED}❌ 配置不完整（需 TG_BOT_TOKEN / TG_PUSH_CHAT_ID / TG_CHANNELS），请重新配置。${PLAIN}"
+    if [ -z "$TG_BOT_TOKEN" ] || [ -z "$TG_PUSH_CHAT_ID" ] || [ -z "$NS_URL" ]; then
+        echo -e "${RED}❌ 配置不完整（需 TG_BOT_TOKEN / TG_PUSH_CHAT_ID / NS_URL），请重新配置。${PLAIN}"
         return 1
     fi
     return 0
@@ -44,7 +45,7 @@ write_config() {
     cat > "$CONFIG_FILE" <<EOF
 TG_BOT_TOKEN="$TG_BOT_TOKEN"
 TG_PUSH_CHAT_ID="$TG_PUSH_CHAT_ID"
-TG_CHANNELS="$TG_CHANNELS"
+NS_URL="$NS_URL"
 KEYWORDS="$KEYWORDS"
 EOF
     echo -e "${GREEN}✅ 配置已保存到 $CONFIG_FILE${PLAIN}"
@@ -53,9 +54,7 @@ EOF
 # ============================================
 # 时间格式：2025.12.08.10:40
 # ============================================
-fmt_time() {
-    date '+%Y.%m.%d.%H:%M'
-}
+fmt_time() { date '+%Y.%m.%d.%H:%M'; }
 
 # ============================================
 # Telegram 推送（content 必须是“真实换行”文本）
@@ -74,7 +73,7 @@ tg_send() {
 # ============================================
 initial_config() {
     echo -e "${BLUE}======================================${PLAIN}"
-    echo -e "${PURPLE} nodeseek 配置向导（Telegram个人推送）${PLAIN}"
+    echo -e "${PURPLE} NodeSeek 最新帖子监控 配置向导${PLAIN}"
     echo -e "${BLUE}======================================${PLAIN}"
     echo ""
     echo "提示：按 Enter 保留当前配置，输入新值将覆盖原配置。"
@@ -107,16 +106,14 @@ initial_config() {
         [[ -z "$new_chat_id" ]] && new_chat_id="0"
     fi
 
-    # --- Telegram Channel(s) ---
-    if [ -n "$TG_CHANNELS" ]; then
-        read -rp "请输入要监控的 Telegram 频道 [当前: $TG_CHANNELS] (多个用空格分隔): " new_channels
-        [[ -z "$new_channels" ]] && new_channels="$TG_CHANNELS"
+    # --- NodeSeek URL ---
+    local default_url="https://www.nodeseek.com/?sortBy=postTime"
+    if [ -n "$NS_URL" ]; then
+        read -rp "请输入要监控的 NodeSeek 页面URL [当前: $NS_URL] (回车默认最新帖): " new_url
+        [[ -z "$new_url" ]] && new_url="$NS_URL"
     else
-        read -rp "请输入要监控的 Telegram 频道（多个用空格分隔）: " new_channels
-        while [[ -z "$new_channels" ]]; do
-            echo "❌ 频道不能为空，请重新输入。"
-            read -rp "请输入频道名: " new_channels
-        done
+        read -rp "请输入要监控的 NodeSeek 页面URL [默认: $default_url]: " new_url
+        [[ -z "$new_url" ]] && new_url="$default_url"
     fi
 
     # 写入 cron（直跑，无 flock 包装）
@@ -130,7 +127,7 @@ initial_config() {
     if [[ "$reset_kw" =~ ^[Yy]$ ]]; then
         while true; do
             echo "请输入关键词（多个关键词用 , 分隔），示例：上架,库存,补货"
-            read -rp "输入关键词: " new_keywords
+            read -rp "输入关键词(留空=清空关键词): " new_keywords
 
             if [[ -z "$new_keywords" ]]; then
                 KEYWORDS=""
@@ -155,7 +152,7 @@ initial_config() {
 
     TG_BOT_TOKEN="$new_bot_token"
     TG_PUSH_CHAT_ID="$new_chat_id"
-    TG_CHANNELS="$new_channels"
+    NS_URL="$new_url"
     write_config
 
     echo ""
@@ -165,106 +162,151 @@ initial_config() {
 }
 
 # ============================================
-# 提取标题函数
+# HTML 解码（尽量覆盖常见实体）
 # ============================================
-extract_title() {
-    local message="$1"
-    local pattern='^( *[0-9]+ ?(views?|次)? *$)|^[0-9]{1,2}:[0-9]{2}$|^[0-9]{4}/[0-9]{2}/[0-9]{2}'
-    if [[ -z "$message" || "$message" =~ $pattern ]]; then
-        echo ""
-        return
-    fi
-
-    local title=""
-    if [[ "$message" =~ 【([^】]+)】 ]]; then
-        title="${BASH_REMATCH[1]}"
-    else
-        title=$(echo "$message" | head -n1)
-    fi
-
-    if [[ -z "$title" || ${#title} -lt 5 || "$title" =~ $pattern ]]; then
-        title=""
-    fi
-
-    echo "$title"
+html_decode() {
+    sed -e 's/&nbsp;/ /g' \
+        -e 's/&amp;/\&/g' \
+        -e 's/&lt;/</g' \
+        -e 's/&gt;/>/g' \
+        -e 's/&quot;/"/g' \
+        -e "s/&#39;/'/g" \
+        -e 's/&#036;/$/g' \
+        -e 's/&#64;/@/g'
 }
 
 # ============================================
-# 手动打印
+# 抓取 NodeSeek 页面 HTML（带 UA / gzip / 跟随跳转）
+# ============================================
+fetch_nodeseek_html() {
+    local url="$1"
+    curl -s --compressed -L \
+        -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36" \
+        -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" \
+        -H "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8" \
+        -H "Cache-Control: no-cache" \
+        "$url"
+}
+
+# ============================================
+# 从 NodeSeek 列表页提取最新帖子（id|title|url）
+# 说明：
+# - 尽量用“href=/post-xxxx-1”抽取
+# - 对 HTML 结构不做强依赖：只要页面里有 <a ... href="/post-123-1">标题</a> 就能工作
+# ============================================
+extract_posts() {
+    local html="$1"
+
+    # 基础反爬/异常判断
+    if echo "$html" | grep -qiE "Just a moment|Attention Required|Cloudflare|captcha"; then
+        echo "__BLOCKED__"
+        return 0
+    fi
+
+    # 提取 a 标签中指向 /post-xxxxx-1 的标题
+    # 输出：id|title|https://www.nodeseek.com/post-xxxxx-1
+    echo "$html" \
+      | tr '\n' ' ' \
+      | sed 's/<a /\n<a /g' \
+      | awk '
+        BEGIN{IGNORECASE=1}
+        /href="\/post-[0-9]+-1"/ {
+            a=$0
+            # href
+            if (match(a, /href="\/post-[0-9]+-1"/)) {
+                href=substr(a, RSTART+6, RLENGTH-7)
+                # id
+                id=href
+                gsub(/^\/post-/, "", id)
+                gsub(/-1$/, "", id)
+
+                # title：取 a 标签内的纯文本（尽量）
+                # 先截取 > ... </a
+                t=a
+                sub(/.*>/, "", t)
+                sub(/<\/a.*/, "", t)
+                # 去掉内部标签
+                gsub(/<[^>]+>/, "", t)
+                # trim
+                gsub(/^[ \t\r\n]+|[ \t\r\n]+$/, "", t)
+
+                if (length(id) > 0 && length(t) > 0) {
+                    print id "|" t "|https://www.nodeseek.com" href
+                }
+            }
+        }
+      ' \
+      | head -n 30 \
+      | html_decode \
+      | awk -F'|' '
+        # 去掉明显无效/过短标题
+        length($2) >= 4 { print $0 }
+      '
+}
+
+# ============================================
+# 手动打印最新帖子标题
 # ============================================
 print_latest() {
     read_config || return
     echo -e "${BLUE}======================================${PLAIN}"
-    echo -e "${PURPLE} 最新频道消息标题${PLAIN}"
+    echo -e "${PURPLE} NodeSeek 最新帖子（缓存）${PLAIN}"
     echo -e "${BLUE}======================================${PLAIN}"
 
-    for ch in $TG_CHANNELS; do
-        local STATE_FILE="$WORK_DIR/last_${ch}.txt"
-        echo -e "${CYAN}频道：$ch${PLAIN}"
-        if [ ! -s "$STATE_FILE" ]; then
-            echo "最新标题：（暂无消息或提取失败）"
-        else
-            echo -e "最新10条标题（最新在下）："
-            local i=1
-            while read -r title; do
-                echo "${i}) ${title}"
-                ((i++))
-            done < "$STATE_FILE"
-        fi
-        echo "--------------------------------------"
+    local STATE_FILE="$WORK_DIR/last_nodeseek.txt"
+    if [ ! -s "$STATE_FILE" ]; then
+        echo "暂无缓存，请先执行「手动更新（刷新缓存）」"
+        return
+    fi
+
+    echo -e "最新10条（最新在下）："
+    local i=1
+    tail -n 10 "$STATE_FILE" | while IFS= read -r line; do
+        local id title url
+        id=$(echo "$line" | awk -F'|' '{print $1}')
+        title=$(echo "$line" | awk -F'|' '{print $2}')
+        url=$(echo "$line" | awk -F'|' '{print $3}')
+        echo "${i}) [$id] $title"
+        echo "    $url"
+        ((i++))
     done
 }
 
 # ============================================
-# 手动刷新10条新的信息（只更新缓存 + 简单日志，不再重复写匹配日志）
+# 手动刷新：抓取最新帖子并更新缓存
 # ============================================
 manual_fresh() {
     read_config || return
 
-    for ch in $TG_CHANNELS; do
-        local STATE_FILE="$WORK_DIR/last_${ch}.txt"
+    local STATE_FILE="$WORK_DIR/last_nodeseek.txt"
 
-        local html
-        html=$(curl -s --compressed -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" "https://t.me/s/${ch}")
-        if [[ -z "$html" ]]; then
-            echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] ❌ 获取频道HTML失败" >> "$LOG_FILE"
-            continue
-        fi
+    local html
+    html=$(fetch_nodeseek_html "$NS_URL")
+    if [[ -z "$html" ]]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [NodeSeek] ❌ 获取HTML失败" >> "$LOG_FILE"
+        return
+    fi
 
-        local raw_messages=()
-        while IFS= read -r line; do raw_messages+=("$line"); done < <(echo "$html" | awk '
-            BEGIN { RS="</div>" }
-            /tgme_widget_message_text/ && !/tgme_widget_message_views/ && !/tgme_widget_message_date/ {
-                gsub(/.*tgme_widget_message_text[^>]*>/, "")
-                gsub(/<br>/, "\n")
-                gsub(/<[^>]+>/, "")
-                gsub(/&nbsp;/, " ")
-                gsub(/&amp;/, "&")
-                gsub(/&lt;/, "<")
-                gsub(/&gt;/, ">")
-                gsub(/&quot;/, "\"")
-                gsub(/&#036;/, "$")
-                gsub(/&#64;/, "@")
-                gsub(/^[ \t\n\r]+|[ \t\n\r]+$/, "")
-                if (length($0) > 0) print $0
-            }
-        ' | tail -n 10)
+    local posts
+    posts=$(extract_posts "$html")
 
-        local messages=()
-        for raw in "${raw_messages[@]}"; do
-            local title
-            title=$(extract_title "$raw")
-            [[ -n "$title" ]] && messages+=("$title")
-        done
+    if [[ "$posts" == "__BLOCKED__" ]]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [NodeSeek] ⚠️ 可能被风控/Cloudflare 拦截（Just a moment / captcha）" >> "$LOG_FILE"
+        return
+    fi
 
-        if [[ ${#messages[@]} -eq 0 ]]; then
-            echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] ❌ 未提取到有效标题" >> "$LOG_FILE"
-            continue
-        fi
+    if [[ -z "$posts" ]]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [NodeSeek] ❌ 未提取到帖子（页面结构变化或被拦截）" >> "$LOG_FILE"
+        return
+    fi
 
-        printf "%s\n" "${messages[@]}" > "$STATE_FILE"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] 最新消息已更新" >> "$LOG_FILE"
-    done
+    # 写缓存（只保留最近 50 条，避免越来越大）
+    echo "$posts" | tac | awk '!seen[$1]++' | tac > "$STATE_FILE"  # 去重（按 id）
+    if (( $(wc -l < "$STATE_FILE") > 50 )); then
+        tail -n 50 "$STATE_FILE" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
+    fi
+
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [NodeSeek] ✅ 最新帖子缓存已更新" >> "$LOG_FILE"
 }
 
 # ============================================
@@ -273,64 +315,68 @@ manual_fresh() {
 manual_push() {
     read_config || return
 
+    local STATE_FILE="$WORK_DIR/last_nodeseek.txt"
+    if [[ ! -s "$STATE_FILE" ]]; then
+        echo "❌ 无缓存文件，请先手动更新（刷新缓存）"
+        return
+    fi
+
+    if [[ -z "$KEYWORDS" ]]; then
+        echo "❌ 未设置关键词，跳过推送"
+        return
+    fi
+
     local KEYWORDS_LOWER
     KEYWORDS_LOWER=$(echo "$KEYWORDS" | tr 'A-Z' 'a-z')
 
-    for ch in $TG_CHANNELS; do
-        local STATE_FILE="$WORK_DIR/last_${ch}.txt"
-        echo -e "${CYAN}频道：$ch${PLAIN}"
+    local lines=()
+    while IFS= read -r line; do lines+=("$line"); done < "$STATE_FILE"
 
-        if [[ -z "$KEYWORDS" ]]; then
-            echo "❌ 未设置关键词，跳过 [$ch]"
-            continue
-        fi
+    local total=${#lines[@]}
+    local start=$(( total > 10 ? total - 10 : 0 ))
+    local matched=()
 
-        if [[ ! -s "$STATE_FILE" ]]; then
-            echo "❌ 无缓存文件，跳过 [$ch]"
-            continue
-        fi
+    for ((i=start; i<total; i++)); do
+        local id title url
+        id=$(echo "${lines[$i]}" | awk -F'|' '{print $1}')
+        title=$(echo "${lines[$i]}" | awk -F'|' '{print $2}')
+        url=$(echo "${lines[$i]}" | awk -F'|' '{print $3}')
 
-        local messages=()
-        while IFS= read -r line; do messages+=("$line"); done < "$STATE_FILE"
+        local t_lower
+        t_lower=$(echo "$title" | tr 'A-Z' 'a-z')
 
-        local total=${#messages[@]}
-        local start=$(( total > 10 ? total - 10 : 0 ))
-        local matched_msgs=()
-
-        for ((idx=start; idx<total; idx++)); do
-            local msg="${messages[$idx]}"
-            local msg_lower
-            msg_lower=$(echo "$msg" | tr 'A-Z' 'a-z')
-
-            for kw in $KEYWORDS_LOWER; do
-                if [[ "$msg_lower" == *"$kw"* ]]; then
-                    matched_msgs+=("$msg")
-                    break
-                fi
-            done
+        for kw in $KEYWORDS_LOWER; do
+            if [[ "$t_lower" == *"$kw"* ]]; then
+                matched+=("${id}|${title}|${url}")
+                break
+            fi
         done
-
-        if [[ ${#matched_msgs[@]} -eq 0 ]]; then
-            echo "⚠️ [$ch] 无匹配关键词消息"
-            continue
-        fi
-
-        local now_t
-        now_t=$(fmt_time)
-
-        local push_text=""
-        for msg in "${matched_msgs[@]}"; do
-            local one_line
-            one_line=$(echo "$msg" | tr '\r\n' ' ' | awk '{$1=$1;print}')
-
-            push_text+=$'🎯Node\n'
-            push_text+=$'🕒时间: '"${now_t}"$'\n'
-            push_text+=$'🌐标题: '"${one_line}"$'\n\n'
-        done
-
-        tg_send "$push_text"
-        echo "✅ [$ch] 推送完成（匹配 ${#matched_msgs[@]} 条）"
     done
+
+    if [[ ${#matched[@]} -eq 0 ]]; then
+        echo "⚠️ 无匹配关键词帖子"
+        return
+    fi
+
+    local now_t
+    now_t=$(fmt_time)
+
+    local push_text=""
+    for x in "${matched[@]}"; do
+        local id title url
+        id=$(echo "$x" | awk -F'|' '{print $1}')
+        title=$(echo "$x" | awk -F'|' '{print $2}')
+        url=$(echo "$x" | awk -F'|' '{print $3}')
+
+        push_text+=$'🎯NodeSeek 新帖\n'
+        push_text+=$'🕒时间: '"${now_t}"$'\n'
+        push_text+=$'🆔ID: '"${id}"$'\n'
+        push_text+=$'🌐标题: '"${title}"$'\n'
+        push_text+=$'🔗链接: '"${url}"$'\n\n'
+    done
+
+    tg_send "$push_text"
+    echo "✅ 推送完成（匹配 ${#matched[@]} 条）"
 }
 
 # ============================================
@@ -339,93 +385,96 @@ manual_push() {
 auto_push() {
     read_config || return
 
+    local STATE_FILE="$WORK_DIR/last_nodeseek.txt"
+    if [[ ! -s "$STATE_FILE" ]]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [NodeSeek] ⚠️无缓存文件，跳过自动推送" >> "$LOG_FILE"
+        return
+    fi
+
+    if [[ -z "$KEYWORDS" ]]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [NodeSeek] ⚠️无关键词，跳过自动推送" >> "$LOG_FILE"
+        return
+    fi
+
     local KEYWORDS_LOWER
     KEYWORDS_LOWER=$(echo "$KEYWORDS" | tr 'A-Z' 'a-z')
 
-    local SENT_FILE="$WORK_DIR/sent_nodeseekc.txt"
+    local SENT_FILE="$WORK_DIR/sent_nodeseek_ids.txt"
     [[ -f "$SENT_FILE" ]] || touch "$SENT_FILE"
 
-    for ch in $TG_CHANNELS; do
-        local STATE_FILE="$WORK_DIR/last_${ch}.txt"
+    local lines=()
+    while IFS= read -r line; do lines+=("$line"); done < "$STATE_FILE"
 
-        if [[ -z "$KEYWORDS" ]]; then
-            echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] ⚠️无关键词，跳过自动推送" >> "$LOG_FILE"
-            continue
-        fi
+    local total=${#lines[@]}
+    local start=$(( total > 10 ? total - 10 : 0 ))
+    local new_matched=()
 
-        if [[ ! -s "$STATE_FILE" ]]; then
-            echo "$(date '+%Y-%m-%d %H:%M:%S') [$ch] ⚠️无缓存文件，跳过自动推送" >> "$LOG_FILE"
-            continue
-        fi
+    local nowlog
+    nowlog=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "$nowlog [NodeSeek] 当前关键词：$KEYWORDS" >> "$LOG_FILE"
+    echo "$nowlog [NodeSeek] 最新10条帖子匹配情况如下：" >> "$LOG_FILE"
 
-        local messages=()
-        while IFS= read -r line; do messages+=("$line"); done < "$STATE_FILE"
+    for ((i=start; i<total; i++)); do
+        local id title url
+        id=$(echo "${lines[$i]}" | awk -F'|' '{print $1}')
+        title=$(echo "${lines[$i]}" | awk -F'|' '{print $2}')
+        url=$(echo "${lines[$i]}" | awk -F'|' '{print $3}')
 
-        local total=${#messages[@]}
-        local start=$(( total > 10 ? total - 10 : 0 ))
-        local new_matched_msgs=()
+        local t_lower matched_kw=""
+        t_lower=$(echo "$title" | tr 'A-Z' 'a-z')
 
-        # 写一次匹配日志（只在 auto_push 里写，避免重复）
-        local nowlog
-        nowlog=$(date '+%Y-%m-%d %H:%M:%S')
-        echo "$nowlog [$ch] 当前关键词：$KEYWORDS" >> "$LOG_FILE"
-        echo "$nowlog [$ch] 最新10条消息匹配情况如下：" >> "$LOG_FILE"
-
-        for ((idx=start; idx<total; idx++)); do
-            local msg="${messages[$idx]}"
-            local msg_lower
-            msg_lower=$(echo "$msg" | tr 'A-Z' 'a-z')
-
-            local matched_kw=""
-            for kw in $KEYWORDS_LOWER; do
-                if [[ "$msg_lower" == *"$kw"* ]]; then
-                    matched_kw="$kw"
-                    break
-                fi
-            done
-
-            if [[ -n "$matched_kw" ]]; then
-                if grep -Fxq "$msg" "$SENT_FILE"; then
-                    echo "$nowlog [$ch] 已推送过（跳过）：${msg}" >> "$LOG_FILE"
-                else
-                    echo "$nowlog [$ch] 匹配 ✔：${msg}（关键词：$matched_kw）" >> "$LOG_FILE"
-                    new_matched_msgs+=("$msg")
-                fi
-            else
-                echo "$nowlog [$ch] 未匹配 ✖：${msg}" >> "$LOG_FILE"
+        for kw in $KEYWORDS_LOWER; do
+            if [[ "$t_lower" == *"$kw"* ]]; then
+                matched_kw="$kw"
+                break
             fi
         done
 
-        if [[ ${#new_matched_msgs[@]} -eq 0 ]]; then
-            echo "$nowlog [$ch] ⚠️无匹配或均已推送过" >> "$LOG_FILE"
-            continue
+        if [[ -n "$matched_kw" ]]; then
+            if grep -Fxq "$id" "$SENT_FILE"; then
+                echo "$nowlog [NodeSeek] 已推送过（跳过）：[$id] $title" >> "$LOG_FILE"
+            else
+                echo "$nowlog [NodeSeek] 匹配 ✔：[$id] $title（关键词：$matched_kw）" >> "$LOG_FILE"
+                new_matched+=("${id}|${title}|${url}")
+            fi
+        else
+            echo "$nowlog [NodeSeek] 未匹配 ✖：[$id] $title" >> "$LOG_FILE"
         fi
-
-        local now_t
-        now_t=$(fmt_time)
-
-        local push_text=""
-        for msg in "${new_matched_msgs[@]}"; do
-            local one_line
-            one_line=$(echo "$msg" | tr '\r\n' ' ' | awk '{$1=$1;print}')
-
-            push_text+=$'🎯Node\n'
-            push_text+=$'🕒时间: '"${now_t}"$'\n'
-            push_text+=$'🌐标题: '"${one_line}"$'\n\n'
-        done
-
-        tg_send "$push_text"
-
-        for msg in "${new_matched_msgs[@]}"; do
-            echo "$msg" >> "$SENT_FILE"
-        done
-
-        echo "$nowlog [$ch] 📩 自动推送成功（${#new_matched_msgs[@]} 条）" >> "$LOG_FILE"
     done
+
+    if [[ ${#new_matched[@]} -eq 0 ]]; then
+        echo "$nowlog [NodeSeek] ⚠️无匹配或均已推送过" >> "$LOG_FILE"
+        return
+    fi
+
+    local now_t
+    now_t=$(fmt_time)
+
+    local push_text=""
+    for x in "${new_matched[@]}"; do
+        local id title url
+        id=$(echo "$x" | awk -F'|' '{print $1}')
+        title=$(echo "$x" | awk -F'|' '{print $2}')
+        url=$(echo "$x" | awk -F'|' '{print $3}')
+
+        push_text+=$'🎯NodeSeek 新帖\n'
+        push_text+=$'🕒时间: '"${now_t}"$'\n'
+        push_text+=$'🆔ID: '"${id}"$'\n'
+        push_text+=$'🌐标题: '"${title}"$'\n'
+        push_text+=$'🔗链接: '"${url}"$'\n\n'
+    done
+
+    tg_send "$push_text"
+
+    for x in "${new_matched[@]}"; do
+        echo "$x" | awk -F'|' '{print $1}' >> "$SENT_FILE"   # 只存 ID，稳定不变
+    done
+
+    echo "$nowlog [NodeSeek] 📩 自动推送成功（${#new_matched[@]} 条）" >> "$LOG_FILE"
 }
 
 # ============================================
-# 测试 Telegram 推送（真换行：不会出现 \n 字面量）
+# 测试 Telegram 推送（真换行）
 # ============================================
 test_notification() {
     read_config || return
@@ -433,11 +482,11 @@ test_notification() {
     local now_t
     now_t=$(fmt_time)
 
-    # ✅ 必须用 $'...\n' 生成“真实换行”
     local msg=""
-    msg+=$'🎯Node\n'
+    msg+=$'🎯NodeSeek\n'
     msg+=$'🕒时间: '"${now_t}"$'\n'
-    msg+=$'🌐标题: 这是来自脚本的测试推送（看到说明配置正常 ✅）'
+    msg+=$'🌐标题: 这是来自脚本的测试推送（看到说明配置正常 ✅）\n'
+    msg+=$'🔗链接: https://www.nodeseek.com/?sortBy=postTime'
 
     tg_send "$msg"
     echo -e "${GREEN}✅ Telegram 测试推送已发送（请到私聊查看）${PLAIN}"
@@ -445,57 +494,36 @@ test_notification() {
 }
 
 # ============================================
-# 日志轮转（保留最近 7 天归档）
-# ============================================
-# ============================================
 # 日志轮转（按天：只保留“当天”日志，跨天自动归档并清空）
-# 说明：
-# 1) nodeseek.log / nodeseek_cron.log 只保留当天内容
-# 2) 跨天时自动归档为 .YYYY-MM-DD，并清空新一天日志
-# 3) 归档只保留最近 7 天（可改）
 # ============================================
 log_rotate() {
     local KEEP_DAYS=7
-
-    # 需要按天维护的日志文件
     local files=("$LOG_FILE" "$CRON_LOG")
 
     local today
     today=$(date +%Y-%m-%d)
 
     for f in "${files[@]}"; do
-        # 确保文件存在
         [[ -f "$f" ]] || touch "$f"
-
-        # 找出该日志最后一次写入的日期
         local last_day
         last_day=$(date -r "$f" +%Y-%m-%d 2>/dev/null || echo "$today")
 
-        # 如果跨天：归档昨天日志 -> 清空当天日志
         if [[ "$last_day" != "$today" ]]; then
             local archive="${f}.${last_day}"
-            # 防止重复覆盖：如果 archive 已存在，则追加一个时间后缀
             if [[ -f "$archive" ]]; then
                 archive="${archive}.$(date +%H%M%S)"
             fi
-            mv "$f" "$archive" 2>/dev/null || {
-                # mv 失败就拷贝再清空兜底
-                cp -f "$f" "$archive" 2>/dev/null
-            }
+            mv "$f" "$archive" 2>/dev/null || { cp -f "$f" "$archive" 2>/dev/null; }
             : > "$f"
         fi
     done
 
-    # 清理归档：只保留最近 KEEP_DAYS 天
     find "$WORK_DIR" -maxdepth 1 -type f \( -name "nodeseek.log.*" -o -name "nodeseek_cron.log.*" \) -mtime +"$KEEP_DAYS" -delete 2>/dev/null || true
 }
 
-
 # ============================================
 # cron 模式：每20秒执行一次 manual_fresh + auto_push
-# 关键修复：
-# 1) 内置 flock 锁，避免 cron 每分钟重复启动多个实例
-# 2) sleep 补偿，周期更稳定接近 20 秒
+# 内置 flock 锁，避免重复启动
 # ============================================
 if [[ "$1" == "-cron" ]]; then
     LOCK_FILE="$WORK_DIR/nodeseek.lock"
@@ -508,24 +536,22 @@ if [[ "$1" == "-cron" ]]; then
     while true; do
         start_ts=$(date +%s)
 
-        # ✅ 每轮先按天轮转，保证 nodeseek.log / nodeseek_cron.log 只保留当天
         log_rotate
 
         trim_file() {
             local file="$1"
-            local max_lines=100
+            local max_lines=120
             [[ -f "$file" ]] || return
             local cnt
             cnt=$(wc -l < "$file")
             if (( cnt > max_lines )); then
-                tail -n "$max_lines" "$file" > "${file}.tmp"
-                mv "${file}.tmp" "$file"
+                tail -n "$max_lines" "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
             fi
         }
 
         trim_file "$CRON_LOG"
         trim_file "$LOG_FILE"
-        trim_file "$WORK_DIR/sent_nodeseekc.txt"
+        trim_file "$WORK_DIR/sent_nodeseek_ids.txt"
 
         echo "$(date '+%Y-%m-%d %H:%M:%S') ▶️ 执行 manual_fresh()" >> "$CRON_LOG"
         manual_fresh >/dev/null 2>&1
@@ -545,13 +571,11 @@ if [[ "$1" == "-cron" ]]; then
 
         sleep "$sleep_time"
     done
-
     exit 0
 fi
 
 # ============================================
 # 设置定时任务（cron 每分钟触发一次，脚本内部自循环）
-# 目标 cron 行：* * * * * /root/TrafficCop/nodeseek.sh -cron
 # ============================================
 setup_cron() {
     local entry="* * * * * /root/TrafficCop/nodeseek.sh -cron"
@@ -596,11 +620,11 @@ main_menu() {
     while true; do
         clear
         echo -e "${BLUE}======================================${PLAIN}"
-        echo -e "${PURPLE} VPS 监控管理菜单（Telegram个人推送）${PLAIN}"
+        echo -e "${PURPLE} NodeSeek 监控管理菜单（Telegram个人推送）${PLAIN}"
         echo -e "${BLUE}======================================${PLAIN}"
         echo -e "${GREEN}1.${PLAIN} 安装/修改配置"
-        echo -e "${GREEN}2.${PLAIN} 打印最新消息"
-        echo -e "${GREEN}3.${PLAIN} 推送最新消息（关键词匹配）"
+        echo -e "${GREEN}2.${PLAIN} 打印最新帖子（缓存）"
+        echo -e "${GREEN}3.${PLAIN} 推送最新帖子（关键词匹配）"
         echo -e "${GREEN}4.${PLAIN} 推送测试消息（Telegram）"
         echo -e "${GREEN}5.${PLAIN} 手动更新（刷新缓存）"
         echo -e "${RED}6.${PLAIN} 清除cron任务"
