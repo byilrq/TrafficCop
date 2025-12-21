@@ -1,8 +1,6 @@
 #!/bin/bash
 # ============================================
 # Node 最新帖子监控脚本
-# (Telegram个人推送版 / 真换行推送 / 内置锁防重启 / 可配置循环间隔 / RSS抓取)
-# 监控 RSS: https://rss.nodeseek.com/?sortBy=postTime
 # 更新时间：2025-12-21
 # ============================================
 
@@ -148,11 +146,15 @@ initial_config() {
     # --- 关键词过滤设置 ---
     echo ""
     echo "当前关键词：${KEYWORDS:-未设置}"
+    echo "支持写法："
+    echo "  - 单关键词：抽奖"
+    echo "  - 双关键词AND：车找人&box   （标题里必须同时包含“车找人”和“box”）"
+    echo ""
     read -rp "是否需要重置关键词？(Y/N): " reset_kw
 
     if [[ "$reset_kw" =~ ^[Yy]$ ]]; then
         while true; do
-            echo "请输入关键词（多个关键词用 , 分隔），示例：抽奖,evoxt,minibox"
+            echo "请输入关键词（多个用 , 分隔），示例：抽奖,evoxt,车找人&box"
             read -rp "输入关键词(留空=清空关键词): " new_keywords
 
             if [[ -z "$new_keywords" ]]; then
@@ -161,11 +163,12 @@ initial_config() {
                 break
             fi
 
+            # 逗号转空格，压缩多余空格
             new_keywords=$(echo "$new_keywords" | sed 's/,/ /g' | awk '{$1=$1; print}')
             kw_count=$(echo "$new_keywords" | wc -w)
 
-            if (( kw_count > 10 )); then
-                echo "❌ 关键词数量不能超过 10 个（当前：$kw_count 个）。请重新输入。"
+            if (( kw_count > 20 )); then
+                echo "❌ 关键词数量建议不超过 20 个（当前：$kw_count 个）。请重新输入。"
             else
                 KEYWORDS="$new_keywords"
                 echo "关键词已更新为：$KEYWORDS"
@@ -189,11 +192,6 @@ initial_config() {
 
 # ============================================
 # 抓取 node RSS（带 If-Modified-Since，减少风控概率）
-# 输出：把 RSS 内容写到 stdout
-# 返回：
-#   0 有内容（200）
-#   2 未更新（304）
-#   1 失败
 # ============================================
 fetch_node_rss() {
     local url="$1"
@@ -207,7 +205,6 @@ fetch_node_rss() {
         [[ -n "$lm" ]] && ims_arg=(-H "If-Modified-Since: $lm")
     fi
 
-    # 用 curl 同时拿 header + body，便于判断 200/304
     local http_code
     http_code=$(curl -sS --compressed -L \
         -D "$tmp_h" -o "$tmp_b" \
@@ -227,7 +224,6 @@ fetch_node_rss() {
         return 1
     fi
 
-    # 记录 Last-Modified，供下次 If-Modified-Since 使用
     local new_lm
     new_lm=$(grep -i '^last-modified:' "$tmp_h" | tail -n 1 | sed 's/^[Ll]ast-[Mm]odified:[ ]*//; s/\r//')
     if [[ -n "$new_lm" ]]; then
@@ -244,7 +240,6 @@ fetch_node_rss() {
 extract_posts() {
     local xml="$1"
 
-    # ✅ 只判断挑战页特征，避免误判
     if echo "$xml" | grep -qiE "Just a moment|cf-turnstile|challenge-platform|captcha"; then
         echo "__BLOCKED__"
         return 0
@@ -295,6 +290,58 @@ extract_posts() {
         }
       ' \
       | head -n 50
+}
+
+# ============================================
+# ✅ 关键词匹配函数
+# 规则：
+# - KEYWORDS 为空：不匹配
+# - token 不含 & ：单关键词（title 包含即可）
+# - token 含 & ：双关键词AND（title 必须同时包含左右两部分）
+# 返回：
+#   echo 匹配到的关键词（用于日志显示），不匹配则 echo 空串
+# ============================================
+match_title() {
+    local title="$1"
+    local title_lower
+    title_lower=$(echo "$title" | tr 'A-Z' 'a-z')
+
+    [[ -z "$KEYWORDS" ]] && { echo ""; return; }
+
+    local token
+    for token in $KEYWORDS; do
+        # 去掉 token 两侧空白
+        token=$(echo "$token" | awk '{$1=$1;print}')
+        [[ -z "$token" ]] && continue
+
+        local token_lower
+        token_lower=$(echo "$token" | tr 'A-Z' 'a-z')
+
+        # 双关键词 AND：a&b
+        if [[ "$token_lower" == *"&"* ]]; then
+            # 允许写成 a&b 或 a & b：先删除空格再切
+            local t
+            t=$(echo "$token_lower" | tr -d ' ')
+            local a b
+            a="${t%%&*}"
+            b="${t#*&}"
+
+            [[ -z "$a" || -z "$b" ]] && continue
+
+            if [[ "$title_lower" == *"$a"* && "$title_lower" == *"$b"* ]]; then
+                echo "$a&$b"
+                return
+            fi
+        else
+            # 单关键词
+            if [[ "$title_lower" == *"$token_lower"* ]]; then
+                echo "$token_lower"
+                return
+            fi
+        fi
+    done
+
+    echo ""
 }
 
 # ============================================
@@ -361,13 +408,11 @@ manual_fresh() {
         return
     fi
 
-    # ✅ 合并：把“新抓到的posts”追加到旧缓存，再按 id 去重，保留最近 200 条
     cat "$STATE_FILE" <(echo "$posts") \
         | awk -F'|' 'NF>=3 && $1!="" {print $0}' \
         | awk -F'|' '!seen[$1]++' \
         > "${STATE_FILE}.tmp"
 
-    # 保留最近 200 条（按文件顺序：旧在上，新在下）
     if (( $(wc -l < "${STATE_FILE}.tmp") > 200 )); then
         tail -n 200 "${STATE_FILE}.tmp" > "$STATE_FILE"
         rm -f "${STATE_FILE}.tmp"
@@ -395,9 +440,6 @@ manual_push() {
         return
     fi
 
-    local KEYWORDS_LOWER
-    KEYWORDS_LOWER=$(echo "$KEYWORDS" | tr 'A-Z' 'a-z')
-
     local lines=()
     while IFS= read -r line; do lines+=("$line"); done < "$STATE_FILE"
 
@@ -411,15 +453,11 @@ manual_push() {
         title=$(echo "${lines[$i]}" | awk -F'|' '{print $2}')
         url=$(echo "${lines[$i]}" | awk -F'|' '{print $3}')
 
-        local t_lower
-        t_lower=$(echo "$title" | tr 'A-Z' 'a-z')
-
-        for kw in $KEYWORDS_LOWER; do
-            if [[ "$t_lower" == *"$kw"* ]]; then
-                matched+=("${id}|${title}|${url}")
-                break
-            fi
-        done
+        local hit
+        hit=$(match_title "$title")
+        if [[ -n "$hit" ]]; then
+            matched+=("${id}|${title}|${url}|${hit}")
+        fi
     done
 
     if [[ ${#matched[@]} -eq 0 ]]; then
@@ -432,15 +470,16 @@ manual_push() {
 
     local push_text=""
     for x in "${matched[@]}"; do
-        local id title url
+        local id title url hit
         id=$(echo "$x" | awk -F'|' '{print $1}')
         title=$(echo "$x" | awk -F'|' '{print $2}')
         url=$(echo "$x" | awk -F'|' '{print $3}')
+        hit=$(echo "$x" | awk -F'|' '{print $4}')
 
         push_text+=$'🎯node 新帖\n'
-        
         push_text+=$'🕒时间: '"${now_t}"$'\n'
         push_text+=$'🌐标题: '"${title}"$'\n'
+        push_text+=$'🔎命中: '"${hit}"$'\n'
         push_text+=$'🔗链接: '"${url}"$'\n\n'
     done
 
@@ -465,9 +504,6 @@ auto_push() {
         return
     fi
 
-    local KEYWORDS_LOWER
-    KEYWORDS_LOWER=$(echo "$KEYWORDS" | tr 'A-Z' 'a-z')
-
     local SENT_FILE="$WORK_DIR/sent_node_ids.txt"
     [[ -f "$SENT_FILE" ]] || touch "$SENT_FILE"
 
@@ -489,22 +525,15 @@ auto_push() {
         title=$(echo "${lines[$i]}" | awk -F'|' '{print $2}')
         url=$(echo "${lines[$i]}" | awk -F'|' '{print $3}')
 
-        local t_lower matched_kw=""
-        t_lower=$(echo "$title" | tr 'A-Z' 'a-z')
+        local hit
+        hit=$(match_title "$title")
 
-        for kw in $KEYWORDS_LOWER; do
-            if [[ "$t_lower" == *"$kw"* ]]; then
-                matched_kw="$kw"
-                break
-            fi
-        done
-
-        if [[ -n "$matched_kw" ]]; then
+        if [[ -n "$hit" ]]; then
             if grep -Fxq "$id" "$SENT_FILE"; then
                 echo "$nowlog [node] 已推送过（跳过）：[$id] $title" >> "$LOG_FILE"
             else
-                echo "$nowlog [node] 匹配 ✔：[$id] $title（关键词：$matched_kw）" >> "$LOG_FILE"
-                new_matched+=("${id}|${title}|${url}")
+                echo "$nowlog [node] 匹配 ✔：[$id] $title（命中：$hit）" >> "$LOG_FILE"
+                new_matched+=("${id}|${title}|${url}|${hit}")
             fi
         else
             echo "$nowlog [node] 未匹配 ✖：[$id] $title" >> "$LOG_FILE"
@@ -521,15 +550,17 @@ auto_push() {
 
     local push_text=""
     for x in "${new_matched[@]}"; do
-        local id title url
+        local id title url hit
         id=$(echo "$x" | awk -F'|' '{print $1}')
         title=$(echo "$x" | awk -F'|' '{print $2}')
         url=$(echo "$x" | awk -F'|' '{print $3}')
+        hit=$(echo "$x" | awk -F'|' '{print $4}')
 
         push_text+=$'🎯node 新帖\n'
         push_text+=$'🕒时间: '"${now_t}"$'\n'
         push_text+=$'🆔ID: '"${id}"$'\n'
         push_text+=$'🌐标题: '"${title}"$'\n'
+        push_text+=$'🔎命中: '"${hit}"$'\n'
         push_text+=$'🔗链接: '"${url}"$'\n\n'
     done
 
@@ -555,7 +586,7 @@ test_notification() {
     msg+=$'🎯node\n'
     msg+=$'🕒时间: '"${now_t}"$'\n'
     msg+=$'🌐标题: 这是来自脚本的测试推送（看到说明配置正常 ✅）\n'
-    msg+=$'🔗链接: https://www.node.com/?sortBy=postTime'
+    msg+=$'🔗链接: https://www.nodeseek.com/?sortBy=postTime'
 
     tg_send "$msg"
     echo -e "${GREEN}✅ Telegram 测试推送已发送（请到私聊查看）${PLAIN}"
@@ -593,7 +624,6 @@ if [[ "$1" == "-cron" ]]; then
     exec 200>"$LOCK_FILE"
     flock -n 200 || exit 0
 
-    # 从配置读取间隔（默认 180 秒，最低 20 秒）
     read_config >/dev/null 2>&1 || true
     INTERVAL=${INTERVAL_SEC:-180}
     if ! [[ "$INTERVAL" =~ ^[0-9]+$ ]]; then
