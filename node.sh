@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================
-# NodeSeek 最新帖子 → Telegram 监控脚本 v2.2
+# Node 最新帖子监控脚本
 # (Telegram个人推送版 / 真换行推送 / 内置锁防重启 / 可配置循环间隔 / RSS抓取)
 # 监控 RSS: https://rss.nodeseek.com/?sortBy=postTime
 # 更新时间：2025-12-21
@@ -13,13 +13,13 @@ export TZ='Asia/Shanghai'
 # 配置路径
 WORK_DIR="/root/TrafficCop"
 mkdir -p "$WORK_DIR"
-CONFIG_FILE="$WORK_DIR/nodeseek_config.txt"
-LOG_FILE="$WORK_DIR/nodeseek.log"
-CRON_LOG="$WORK_DIR/nodeseek_cron.log"
-SCRIPT_PATH="$WORK_DIR/nodeseek.sh"
+CONFIG_FILE="$WORK_DIR/node_config.txt"
+LOG_FILE="$WORK_DIR/node.log"
+CRON_LOG="$WORK_DIR/node_cron.log"
+SCRIPT_PATH="$WORK_DIR/node.sh"
 
 # 用于条件请求（If-Modified-Since）
-LAST_MOD_FILE="$WORK_DIR/.nodeseek_last_modified"
+LAST_MOD_FILE="$WORK_DIR/.node_last_modified"
 
 # ================== 彩色定义 ==================
 RED="\033[31m"; GREEN="\033[32m"; YELLOW="\033[33m"
@@ -80,7 +80,7 @@ tg_send() {
 # ============================================
 initial_config() {
     echo -e "${BLUE}======================================${PLAIN}"
-    echo -e "${PURPLE} NodeSeek 最新帖子监控 配置向导${PLAIN}"
+    echo -e "${PURPLE} node 最新帖子监控 配置向导${PLAIN}"
     echo -e "${BLUE}======================================${PLAIN}"
     echo ""
     echo "提示：按 Enter 保留当前配置，输入新值将覆盖原配置。"
@@ -113,13 +113,13 @@ initial_config() {
         [[ -z "$new_chat_id" ]] && new_chat_id="0"
     fi
 
-    # --- NodeSeek RSS URL ---
+    # --- node RSS URL ---
     local default_url="https://rss.nodeseek.com/?sortBy=postTime"
     if [ -n "$NS_URL" ]; then
-        read -rp "请输入要监控的 NodeSeek RSS URL [当前: $NS_URL] (回车默认最新帖): " new_url
+        read -rp "请输入要监控的 node RSS URL [当前: $NS_URL] (回车默认最新帖): " new_url
         [[ -z "$new_url" ]] && new_url="$NS_URL"
     else
-        read -rp "请输入要监控的 NodeSeek RSS URL [默认: $default_url]: " new_url
+        read -rp "请输入要监控的 node RSS URL [默认: $default_url]: " new_url
         [[ -z "$new_url" ]] && new_url="$default_url"
     fi
 
@@ -188,14 +188,14 @@ initial_config() {
 }
 
 # ============================================
-# 抓取 NodeSeek RSS（带 If-Modified-Since，减少风控概率）
+# 抓取 node RSS（带 If-Modified-Since，减少风控概率）
 # 输出：把 RSS 内容写到 stdout
 # 返回：
 #   0 有内容（200）
 #   2 未更新（304）
 #   1 失败
 # ============================================
-fetch_nodeseek_rss() {
+fetch_node_rss() {
     local url="$1"
     local tmp_h="$WORK_DIR/.tmp_headers"
     local tmp_b="$WORK_DIR/.tmp_body"
@@ -223,7 +223,7 @@ fetch_nodeseek_rss() {
     fi
 
     if [[ "$http_code" != "200" ]]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') [NodeSeek] ❌ RSS请求失败 HTTP=$http_code" >> "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [node] ❌ RSS请求失败 HTTP=$http_code" >> "$LOG_FILE"
         return 1
     fi
 
@@ -303,10 +303,10 @@ extract_posts() {
 print_latest() {
     read_config || return
     echo -e "${BLUE}======================================${PLAIN}"
-    echo -e "${PURPLE} NodeSeek 最新帖子（缓存）${PLAIN}"
+    echo -e "${PURPLE} node 最新帖子（缓存）${PLAIN}"
     echo -e "${BLUE}======================================${PLAIN}"
 
-    local STATE_FILE="$WORK_DIR/last_nodeseek.txt"
+    local STATE_FILE="$WORK_DIR/last_node.txt"
     if [ ! -s "$STATE_FILE" ]; then
         echo "暂无缓存，请先执行「手动更新（刷新缓存）」"
         return
@@ -331,20 +331,20 @@ print_latest() {
 manual_fresh() {
     read_config || return
 
-    local STATE_FILE="$WORK_DIR/last_nodeseek.txt"
+    local STATE_FILE="$WORK_DIR/last_node.txt"
     [[ -f "$STATE_FILE" ]] || touch "$STATE_FILE"
 
     local xml
-    xml=$(fetch_nodeseek_rss "$NS_URL")
+    xml=$(fetch_node_rss "$NS_URL")
     local rc=$?
 
     if [[ $rc -eq 2 ]]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') [NodeSeek] ℹ️ RSS未更新（304 Not Modified）" >> "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [node] ℹ️ RSS未更新（304 Not Modified）" >> "$LOG_FILE"
         return
     fi
 
     if [[ $rc -ne 0 || -z "$xml" ]]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') [NodeSeek] ❌ 获取RSS失败或为空" >> "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [node] ❌ 获取RSS失败或为空" >> "$LOG_FILE"
         return
     fi
 
@@ -352,12 +352,12 @@ manual_fresh() {
     posts=$(extract_posts "$xml")
 
     if [[ "$posts" == "__BLOCKED__" ]]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') [NodeSeek] ⚠️ 可能被挑战页拦截（Just a moment / captcha）" >> "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [node] ⚠️ 可能被挑战页拦截（Just a moment / captcha）" >> "$LOG_FILE"
         return
     fi
 
     if [[ -z "$posts" ]]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') [NodeSeek] ❌ 未提取到帖子（RSS结构变化或被拦截）" >> "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [node] ❌ 未提取到帖子（RSS结构变化或被拦截）" >> "$LOG_FILE"
         return
     fi
 
@@ -375,7 +375,7 @@ manual_fresh() {
         mv "${STATE_FILE}.tmp" "$STATE_FILE"
     fi
 
-    echo "$(date '+%Y-%m-%d %H:%M:%S') [NodeSeek] ✅ 最新帖子缓存已更新" >> "$LOG_FILE"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [node] ✅ 最新帖子缓存已更新" >> "$LOG_FILE"
 }
 
 # ============================================
@@ -384,7 +384,7 @@ manual_fresh() {
 manual_push() {
     read_config || return
 
-    local STATE_FILE="$WORK_DIR/last_nodeseek.txt"
+    local STATE_FILE="$WORK_DIR/last_node.txt"
     if [[ ! -s "$STATE_FILE" ]]; then
         echo "❌ 无缓存文件，请先手动更新（刷新缓存）"
         return
@@ -437,9 +437,9 @@ manual_push() {
         title=$(echo "$x" | awk -F'|' '{print $2}')
         url=$(echo "$x" | awk -F'|' '{print $3}')
 
-        push_text+=$'🎯NodeSeek 新帖\n'
+        push_text+=$'🎯node 新帖\n'
+        
         push_text+=$'🕒时间: '"${now_t}"$'\n'
-        push_text+=$'🆔ID: '"${id}"$'\n'
         push_text+=$'🌐标题: '"${title}"$'\n'
         push_text+=$'🔗链接: '"${url}"$'\n\n'
     done
@@ -454,21 +454,21 @@ manual_push() {
 auto_push() {
     read_config || return
 
-    local STATE_FILE="$WORK_DIR/last_nodeseek.txt"
+    local STATE_FILE="$WORK_DIR/last_node.txt"
     if [[ ! -s "$STATE_FILE" ]]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') [NodeSeek] ⚠️无缓存文件，跳过自动推送" >> "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [node] ⚠️无缓存文件，跳过自动推送" >> "$LOG_FILE"
         return
     fi
 
     if [[ -z "$KEYWORDS" ]]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') [NodeSeek] ⚠️无关键词，跳过自动推送" >> "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [node] ⚠️无关键词，跳过自动推送" >> "$LOG_FILE"
         return
     fi
 
     local KEYWORDS_LOWER
     KEYWORDS_LOWER=$(echo "$KEYWORDS" | tr 'A-Z' 'a-z')
 
-    local SENT_FILE="$WORK_DIR/sent_nodeseek_ids.txt"
+    local SENT_FILE="$WORK_DIR/sent_node_ids.txt"
     [[ -f "$SENT_FILE" ]] || touch "$SENT_FILE"
 
     local lines=()
@@ -480,8 +480,8 @@ auto_push() {
 
     local nowlog
     nowlog=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "$nowlog [NodeSeek] 当前关键词：$KEYWORDS" >> "$LOG_FILE"
-    echo "$nowlog [NodeSeek] 最新30条帖子匹配情况如下：" >> "$LOG_FILE"
+    echo "$nowlog [node] 当前关键词：$KEYWORDS" >> "$LOG_FILE"
+    echo "$nowlog [node] 最新30条帖子匹配情况如下：" >> "$LOG_FILE"
 
     for ((i=start; i<total; i++)); do
         local id title url
@@ -501,18 +501,18 @@ auto_push() {
 
         if [[ -n "$matched_kw" ]]; then
             if grep -Fxq "$id" "$SENT_FILE"; then
-                echo "$nowlog [NodeSeek] 已推送过（跳过）：[$id] $title" >> "$LOG_FILE"
+                echo "$nowlog [node] 已推送过（跳过）：[$id] $title" >> "$LOG_FILE"
             else
-                echo "$nowlog [NodeSeek] 匹配 ✔：[$id] $title（关键词：$matched_kw）" >> "$LOG_FILE"
+                echo "$nowlog [node] 匹配 ✔：[$id] $title（关键词：$matched_kw）" >> "$LOG_FILE"
                 new_matched+=("${id}|${title}|${url}")
             fi
         else
-            echo "$nowlog [NodeSeek] 未匹配 ✖：[$id] $title" >> "$LOG_FILE"
+            echo "$nowlog [node] 未匹配 ✖：[$id] $title" >> "$LOG_FILE"
         fi
     done
 
     if [[ ${#new_matched[@]} -eq 0 ]]; then
-        echo "$nowlog [NodeSeek] ⚠️无匹配或均已推送过" >> "$LOG_FILE"
+        echo "$nowlog [node] ⚠️无匹配或均已推送过" >> "$LOG_FILE"
         return
     fi
 
@@ -526,7 +526,7 @@ auto_push() {
         title=$(echo "$x" | awk -F'|' '{print $2}')
         url=$(echo "$x" | awk -F'|' '{print $3}')
 
-        push_text+=$'🎯NodeSeek 新帖\n'
+        push_text+=$'🎯node 新帖\n'
         push_text+=$'🕒时间: '"${now_t}"$'\n'
         push_text+=$'🆔ID: '"${id}"$'\n'
         push_text+=$'🌐标题: '"${title}"$'\n'
@@ -539,7 +539,7 @@ auto_push() {
         echo "$x" | awk -F'|' '{print $1}' >> "$SENT_FILE"
     done
 
-    echo "$nowlog [NodeSeek] 📩 自动推送成功（${#new_matched[@]} 条）" >> "$LOG_FILE"
+    echo "$nowlog [node] 📩 自动推送成功（${#new_matched[@]} 条）" >> "$LOG_FILE"
 }
 
 # ============================================
@@ -552,10 +552,10 @@ test_notification() {
     now_t=$(fmt_time)
 
     local msg=""
-    msg+=$'🎯NodeSeek\n'
+    msg+=$'🎯node\n'
     msg+=$'🕒时间: '"${now_t}"$'\n'
     msg+=$'🌐标题: 这是来自脚本的测试推送（看到说明配置正常 ✅）\n'
-    msg+=$'🔗链接: https://www.nodeseek.com/?sortBy=postTime'
+    msg+=$'🔗链接: https://www.node.com/?sortBy=postTime'
 
     tg_send "$msg"
     echo -e "${GREEN}✅ Telegram 测试推送已发送（请到私聊查看）${PLAIN}"
@@ -589,7 +589,7 @@ log_rotate() {
 # 内置 flock 锁，避免重复启动
 # ============================================
 if [[ "$1" == "-cron" ]]; then
-    LOCK_FILE="$WORK_DIR/nodeseek.lock"
+    LOCK_FILE="$WORK_DIR/node.lock"
     exec 200>"$LOCK_FILE"
     flock -n 200 || exit 0
 
@@ -623,7 +623,7 @@ if [[ "$1" == "-cron" ]]; then
 
         trim_file "$CRON_LOG"
         trim_file "$LOG_FILE"
-        trim_file "$WORK_DIR/sent_nodeseek_ids.txt"
+        trim_file "$WORK_DIR/sent_node_ids.txt"
 
         echo "$(date '+%Y-%m-%d %H:%M:%S') ▶️ 执行 manual_fresh()" >> "$CRON_LOG"
         manual_fresh >/dev/null 2>&1
@@ -650,39 +650,39 @@ fi
 # 设置定时任务（cron 每分钟触发一次，脚本内部自循环）
 # ============================================
 setup_cron() {
-    local entry="* * * * * /root/TrafficCop/nodeseek.sh -cron"
-    echo "🛠 正在检查并更新 nodeseek 定时任务（cron直跑，无 flock 包装）..."
+    local entry="* * * * * /root/TrafficCop/node.sh -cron"
+    echo "🛠 正在检查并更新 node 定时任务（cron直跑，无 flock 包装）..."
 
     crontab -l 2>/dev/null \
-        | grep -v "nodeseek.sh -cron" \
-        | grep -v "/usr/bin/flock -n /tmp/nodeseek.lock" \
-        > /tmp/cron.nodeseek.tmp || true
+        | grep -v "node.sh -cron" \
+        | grep -v "/usr/bin/flock -n /tmp/node.lock" \
+        > /tmp/cron.node.tmp || true
 
     {
-        cat /tmp/cron.nodeseek.tmp
+        cat /tmp/cron.node.tmp
         echo "$entry"
     } | crontab -
 
-    rm -f /tmp/cron.nodeseek.tmp
-    echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ nodeseek cron 已更新为：$entry" | tee -a "$CRON_LOG"
+    rm -f /tmp/cron.node.tmp
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ node cron 已更新为：$entry" | tee -a "$CRON_LOG"
 }
 
 # ============================================
 # 关闭定时任务
 # ============================================
 stop_cron() {
-    echo -e "${YELLOW}⏳ 正在停止 nodeseek 定时任务...${PLAIN}"
+    echo -e "${YELLOW}⏳ 正在停止 node 定时任务...${PLAIN}"
 
-    pkill -f "nodeseek.sh -cron" 2>/dev/null
+    pkill -f "node.sh -cron" 2>/dev/null
 
     crontab -l 2>/dev/null \
-        | grep -v "nodeseek.sh -cron" \
-        | grep -v "/usr/bin/flock -n /tmp/nodeseek.lock" \
+        | grep -v "node.sh -cron" \
+        | grep -v "/usr/bin/flock -n /tmp/node.lock" \
         | crontab - 2>/dev/null
 
-    echo -e "${GREEN}✔ 已从 crontab 中移除 nodeseek 定时任务${PLAIN}"
+    echo -e "${GREEN}✔ 已从 crontab 中移除 node 定时任务${PLAIN}"
     systemctl restart cron 2>/dev/null || service cron restart 2>/dev/null
-    echo -e "${GREEN}✔ nodeseek 定时监控已完全停止${PLAIN}"
+    echo -e "${GREEN}✔ node 定时监控已完全停止${PLAIN}"
 }
 
 # ============================================
@@ -692,13 +692,13 @@ main_menu() {
     while true; do
         clear
         echo -e "${BLUE}======================================${PLAIN}"
-        echo -e "${PURPLE} NodeSeek 监控管理菜单（Telegram个人推送）${PLAIN}"
+        echo -e "${PURPLE} node 监控管理菜单 ${PLAIN}"
         echo -e "${BLUE}======================================${PLAIN}"
         echo -e "${GREEN}1.${PLAIN} 安装/修改配置"
-        echo -e "${GREEN}2.${PLAIN} 打印最新帖子（缓存）"
-        echo -e "${GREEN}3.${PLAIN} 推送最新帖子（关键词匹配）"
-        echo -e "${GREEN}4.${PLAIN} 推送测试消息（Telegram）"
-        echo -e "${GREEN}5.${PLAIN} 手动更新（刷新缓存）"
+        echo -e "${GREEN}2.${PLAIN} 打印最新帖子"
+        echo -e "${GREEN}3.${PLAIN} 推送最新帖子"
+        echo -e "${GREEN}4.${PLAIN} 推送测试消息"
+        echo -e "${GREEN}5.${PLAIN} 手动刷新"
         echo -e "${RED}6.${PLAIN} 清除cron任务"
         echo -e "${WHITE}0.${PLAIN} 退出"
         echo -e "${BLUE}======================================${PLAIN}"
