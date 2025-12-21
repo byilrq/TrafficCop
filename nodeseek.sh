@@ -107,7 +107,7 @@ initial_config() {
     fi
 
     # --- NodeSeek URL ---
-    local default_url="https://www.nodeseek.com/?sortBy=postTime"
+    local default_url="https://rss.nodeseek.com/?sortBy=postTime"
     if [ -n "$NS_URL" ]; then
         read -rp "请输入要监控的 NodeSeek 页面URL [当前: $NS_URL] (回车默认最新帖): " new_url
         [[ -z "$new_url" ]] && new_url="$NS_URL"
@@ -182,9 +182,8 @@ fetch_nodeseek_html() {
     local url="$1"
     curl -s --compressed -L \
         -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36" \
-        -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" \
+        -H "Accept: application/rss+xml, application/xml;q=0.9, */*;q=0.8" \
         -H "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8" \
-        -H "Cache-Control: no-cache" \
         "$url"
 }
 
@@ -195,53 +194,58 @@ fetch_nodeseek_html() {
 # - 对 HTML 结构不做强依赖：只要页面里有 <a ... href="/post-123-1">标题</a> 就能工作
 # ============================================
 extract_posts() {
-    local html="$1"
+    local xml="$1"
 
-    # 基础反爬/异常判断
-    if echo "$html" | grep -qiE "Just a moment|Attention Required|Cloudflare|captcha"; then
+    if echo "$xml" | grep -qiE "Just a moment|Attention Required|Cloudflare|captcha"; then
         echo "__BLOCKED__"
         return 0
     fi
 
-    # 提取 a 标签中指向 /post-xxxxx-1 的标题
-    # 输出：id|title|https://www.nodeseek.com/post-xxxxx-1
-    echo "$html" \
+    echo "$xml" \
       | tr '\n' ' ' \
-      | sed 's/<a /\n<a /g' \
+      | sed 's/<item/\n<item/g' \
       | awk '
         BEGIN{IGNORECASE=1}
-        /href="\/post-[0-9]+-1"/ {
-            a=$0
-            # href
-            if (match(a, /href="\/post-[0-9]+-1"/)) {
-                href=substr(a, RSTART+6, RLENGTH-7)
-                # id
-                id=href
-                gsub(/^\/post-/, "", id)
-                gsub(/-1$/, "", id)
+        /<item/{
+          item=$0
+          title=""; link=""; guid=""
 
-                # title：取 a 标签内的纯文本（尽量）
-                # 先截取 > ... </a
-                t=a
-                sub(/.*>/, "", t)
-                sub(/<\/a.*/, "", t)
-                # 去掉内部标签
-                gsub(/<[^>]+>/, "", t)
-                # trim
-                gsub(/^[ \t\r\n]+|[ \t\r\n]+$/, "", t)
+          if (match(item, /<title><!\[CDATA\[[^]]+\]\]><\/title>/)) {
+            t=substr(item, RSTART, RLENGTH)
+            sub(/.*<title><!\[CDATA\[/,"",t); sub(/\]\]><\/title>.*/,"",t)
+            title=t
+          } else if (match(item, /<title>[^<]+<\/title>/)) {
+            t=substr(item, RSTART, RLENGTH)
+            sub(/.*<title>/,"",t); sub(/<\/title>.*/,"",t)
+            title=t
+          }
 
-                if (length(id) > 0 && length(t) > 0) {
-                    print id "|" t "|https://www.nodeseek.com" href
-                }
-            }
+          if (match(item, /<link>[^<]+<\/link>/)) {
+            l=substr(item, RSTART, RLENGTH)
+            sub(/.*<link>/,"",l); sub(/<\/link>.*/,"",l)
+            link=l
+          }
+
+          if (match(item, /<guid[^>]*>[^<]+<\/guid>/)) {
+            g=substr(item, RSTART, RLENGTH)
+            sub(/.*>/,"",g); sub(/<\/guid>.*/,"",g)
+            guid=g
+          }
+
+          id=guid
+          if (id == "" && link ~ /post-[0-9]+-1/) {
+            id=link
+            sub(/.*post-/,"",id)
+            sub(/-1.*/,"",id)
+          }
+
+          if (length(id) > 0 && length(title) > 0 && length(link) > 0) {
+            gsub(/^[ \t\r\n]+|[ \t\r\n]+$/, "", title)
+            print id "|" title "|" link
+          }
         }
       ' \
-      | head -n 30 \
-      | html_decode \
-      | awk -F'|' '
-        # 去掉明显无效/过短标题
-        length($2) >= 4 { print $0 }
-      '
+      | head -n 30
 }
 
 # ============================================
