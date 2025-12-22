@@ -158,7 +158,7 @@ test_telegram() {
     tg_send "🖥️ <b>[${MACHINE_NAME}]</b> 测试消息\n\n这是一条测试消息，如果您收到此推送，说明 Telegram 配置正常！"
 }
 
-# ==================== 每日报告（你要求的格式） ====================
+# ==================== 流量每日推送====================
 daily_report() {
     if ! read_traffic_config; then
         log_cron "未找到 TrafficCop 配置（$TRAFFIC_CONFIG）"
@@ -178,14 +178,14 @@ daily_report() {
 
     remain_emoji="🟢"
     if (( diff_days <= 0 )); then
-        remain_emoji="⚫"; diff_days="已到期"
+        remain_emoji="🏴‍☠️"; diff_days="已到期"
     elif (( diff_days <= 30 )); then
         remain_emoji="🔴"
     elif (( diff_days <= 60 )); then
         remain_emoji="🟡"
     fi
 
-    tg_send "🎯 <b>[${MACHINE_NAME}]</b> 每日报告
+    tg_send "🎯 <b>[${MACHINE_NAME}]</b> 流量统计
 
 🕒日期：${today}
 ${remain_emoji}剩余：${diff_days}天
