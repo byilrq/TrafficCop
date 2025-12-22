@@ -555,7 +555,7 @@ auto_push() {
         url=$(echo "$x" | awk -F'|' '{print $3}')
         hit=$(echo "$x" | awk -F'|' '{print $4}')
 
-        push_text+=$'🎯node --🔎'"${hit}"$'\n\n'
+        push_text+=$'🎯node --🔎:【'"${hit}"'】'"$'\n\n"
         push_text+=$'🕒时间: '"${now_t}"$'\n'
         push_text+=$'🌐标题: '"${title}"$'\n'
         push_text+=$'🔗链接: '"${url}"$'\n\n'
