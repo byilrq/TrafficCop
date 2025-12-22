@@ -476,7 +476,7 @@ manual_push() {
         url=$(echo "$x" | awk -F'|' '{print $3}')
         hit=$(echo "$x" | awk -F'|' '{print $4}')
 
-        push_text+=$(printf '🎯node --🔎:【%s】\n\n' "${hit}")
+        push_text+=$'🎯node --🔎:【'"${hit}"'】\n'
         push_text+=$'🕒时间: '"${now_t}"$'\n'
         push_text+=$'🌐标题: '"${title}"$'\n'
         push_text+=$'🔗链接: '"${url}"$'\n\n'
@@ -555,7 +555,7 @@ auto_push() {
         url=$(echo "$x" | awk -F'|' '{print $3}')
         hit=$(echo "$x" | awk -F'|' '{print $4}')
 
-        push_text+=$(printf '🎯node --🔎:【%s】\n\n' "${hit}")
+        push_text+=$'🎯node --🔎:【'"${hit}"'】\n'
         push_text+=$'🕒时间: '"${now_t}"$'\n'
         push_text+=$'🌐标题: '"${title}"$'\n'
         push_text+=$'🔗链接: '"${url}"$'\n\n'
@@ -580,7 +580,7 @@ test_notification() {
     now_t=$(fmt_time)
 
     local msg=""
-    msg+=$'🎯node\n\n'
+    msg+=$'🎯node\n'
     msg+=$'🕒时间: '"${now_t}"$'\n'
     msg+=$'🌐标题: 这是来自脚本的测试推送\n'
     msg+=$'🔗链接: https://www.nodeseek.com/?sortBy=postTime'
