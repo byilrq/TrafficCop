@@ -555,10 +555,11 @@ auto_push() {
         url=$(echo "$x" | awk -F'|' '{print $3}')
         hit=$(echo "$x" | awk -F'|' '{print $4}')
 
-        push_text+=$'🎯node --🔎:【'"${hit}"'】\n'
-        push_text+=$'🕒时间: '"${now_t}"$'\n'
-        push_text+=$'🌐标题: '"${title}"$'\n'
-        push_text+=$'🔗链接: '"${url}"$'\n\n'
+        # ✅ 第一行：不要写 "\n"，用 $'\n' 追加真正换行
+        push_text+="🎯node --🔎:【${hit}】"$'\n'
+        push_text+="🕒时间: ${now_t}"$'\n'
+        push_text+="🌐标题: ${title}"$'\n'
+        push_text+="🔗链接: ${url}"$'\n\n'
     done
 
     tg_send "$push_text"
