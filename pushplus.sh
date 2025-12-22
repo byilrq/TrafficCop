@@ -366,11 +366,11 @@ daily_report() {
     diff_emoji="🟢"
     if [[ -z "$expire_ts" || -z "$today_ts" ]]; then
         diff_days="未知"
-        diff_emoji="⚫"
+        diff_emoji="🏴‍☠️"
     else
         diff_days=$(( (expire_ts - today_ts) / 86400 ))
         if (( diff_days < 0 )); then
-            diff_emoji="⚫"
+            diff_emoji="🏴‍☠️"
             diff_days="$((-diff_days))天前"
         elif (( diff_days <= 30 )); then
             diff_emoji="🔴"
@@ -384,9 +384,8 @@ daily_report() {
         fi
     fi
 
-    # === 按你指定的 5 行格式拼接内容 ===
     local title content
-    title="🎯 [${MACHINE_NAME}] 每日报告"
+    title="🎯 [${MACHINE_NAME}] 流量统计"
 
     content=""
     content+="🕒日期：${today}\n"
