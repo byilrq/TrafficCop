@@ -166,6 +166,8 @@ daily_report() {
     fi
 
     local usage start end limit today expire_ts today_ts diff_days remain_emoji
+    local disk_used disk_total disk_pct disk_line msg
+
     usage=$(get_traffic_usage)
     start=$(get_period_start_date)
     end=$(get_period_end_date "$start")
@@ -185,14 +187,30 @@ daily_report() {
         remain_emoji="🟡"
     fi
 
-    tg_send "🎯 <b>[${MACHINE_NAME}]</b> 流量统计
+    # ===== 💾 硬盘使用情况（根分区 /）：已用/总量 + 百分比 =====
+    disk_used=$(df -hP / 2>/dev/null | awk 'NR==2{print $3}')
+    disk_total=$(df -hP / 2>/dev/null | awk 'NR==2{print $2}')
+    disk_pct=$(df -hP / 2>/dev/null | awk 'NR==2{print $5}')
+
+    if [[ -n "$disk_used" && -n "$disk_total" && -n "$disk_pct" ]]; then
+        disk_line="💾空间：${disk_used}/${disk_total} (${disk_pct})"
+    else
+        disk_line="💾空间：未知"
+    fi
+
+    # ===== 组装消息（一次性拼接，避免出现模板重复）=====
+    msg="🎯 <b>[${MACHINE_NAME}]</b> 流量统计
 
 🕒日期：${today}
 ${remain_emoji}剩余：${diff_days}天
 🔄周期：${start} 到 ${end}
 ⌛已用：${usage} GB
-🌐套餐：${limit}"
+🌐套餐：${limit}
+💾空间：${disk_line}"
+
+    tg_send "$msg"
 }
+
 
 # ==================== 终端打印实时流量 ====================
 get_current_traffic() {
