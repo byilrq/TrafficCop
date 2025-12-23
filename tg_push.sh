@@ -187,18 +187,18 @@ daily_report() {
         remain_emoji="🟡"
     fi
 
-    # ===== 💾 硬盘使用情况（根分区 /）：已用/总量 + 百分比 =====
+    # ===== 💾 硬盘使用情况（根分区 /）：只生成 “已用/总量 (百分比)” =====
     disk_used=$(df -hP / 2>/dev/null | awk 'NR==2{print $3}')
     disk_total=$(df -hP / 2>/dev/null | awk 'NR==2{print $2}')
     disk_pct=$(df -hP / 2>/dev/null | awk 'NR==2{print $5}')
 
     if [[ -n "$disk_used" && -n "$disk_total" && -n "$disk_pct" ]]; then
-        disk_line="💾空间：${disk_used}/${disk_total} (${disk_pct})"
+        disk_line="${disk_used}/${disk_total} (${disk_pct})"
     else
-        disk_line="💾空间：未知"
+        disk_line="未知"
     fi
 
-    # ===== 组装消息（一次性拼接，避免出现模板重复）=====
+    # ===== 组装消息（按你要求的最后一行格式）=====
     msg="🎯 <b>[${MACHINE_NAME}]</b> 流量统计
 
 🕒日期：${today}
@@ -210,7 +210,6 @@ ${remain_emoji}剩余：${diff_days}天
 
     tg_send "$msg"
 }
-
 
 # ==================== 终端打印实时流量 ====================
 get_current_traffic() {
