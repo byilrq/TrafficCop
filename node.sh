@@ -239,58 +239,62 @@ fetch_node_rss() {
 # ============================================
 extract_posts() {
     local xml="$1"
-    if echo "$xml" | grep -qiE "Just a moment|cf-turnstile|challenge-platform|captcha|Ray ID"; then
+
+    if echo "$xml" | grep -qiE "Just a moment|cf-turnstile|challenge-platform|captcha"; then
         echo "__BLOCKED__"
         return 0
     fi
 
     echo "$xml" \
-    | tr '\n' ' ' \
-    | sed 's/<item/\n<item/g' \
-    | awk '
-    BEGIN { IGNORECASE=1 }
-    /<item/ {
-        item = $0; title=""; link=""; guid=""; id="";
+      | tr '\n' ' ' \
+      | sed 's/<item/\n<item/g' \
+      | awk '
+        BEGIN { IGNORECASE=1 }
 
-        # Title - 支持 CDATA 和普通文本
-        if (match(item, /<title>(<!\[CDATA\[)?([^<>\]]+)(]]>)?<\/title>/)) {
-            title = substr(item, RSTART, RLENGTH);
-            gsub(/.*<title>(<!\[CDATA\[)?/,"",title);
-            gsub(/(]]>)?<\/title>.*/,"",title);
-            gsub(/^[ \t]+|[ \t]+$/, "", title);
-            gsub(/\|/,"｜",title);  # 防 title 内 | 破坏字段
-        }
+        /<item/ {
+            item=$0
+            title=""; link=""; guid=""
 
-        # Link
-        if (match(item, /<link>[^<]+<\/link>/)) {
-            link = substr(item, RSTART, RLENGTH);
-            sub(/.*<link>/,"",link); sub(/<\/link>.*/,"",link);
-            gsub(/^[ \t]+|[ \t]+$/, "", link);
-        }
+            # ✅ title：允许跨行、允许中间有空格
+            if (match(item, /<title>[[:space:]]*<!\[CDATA\[.*?\]\]>[[:space:]]*<\/title>/)) {
+                t=substr(item, RSTART, RLENGTH)
+                sub(/.*<!\[CDATA\[/,"",t)
+                sub(/\]\]>.*$/,"",t)
+                title=t
+            }
 
-        # GUID 提取 - 关键修复：正确处理带属性的 guid
-        if (match(item, /<guid[^>]*>([^<]+)<\/guid>/)) {
-            guid_raw = substr(item, RSTART, RLENGTH);
-            sub(/.*<guid[^>]*>/, "", guid_raw);
-            sub(/<\/guid>.*/, "", guid_raw);
-            gsub(/[^0-9]/, "", guid_raw);  # 只保留数字
-            if (length(guid_raw) >= 5) id = guid_raw;
-        }
+            # link
+            if (match(item, /<link>[[:space:]]*[^<]+[[:space:]]*<\/link>/)) {
+                l=substr(item, RSTART, RLENGTH)
+                sub(/.*<link>[[:space:]]*/,"",l)
+                sub(/[[:space:]]*<\/link>.*/,"",l)
+                link=l
+            }
 
-        # 仅当 guid 失败才回退到 link（优先级：guid > link）
-        if (id == "" && link ~ /post-[0-9]+-1/) {
-            id = link;
-            sub(/.*post-/, "", id);
-            sub(/-1.*/, "", id);
-            gsub(/[^0-9]/, "", id);
-        }
+            # guid
+            if (match(item, /<guid[^>]*>[[:space:]]*[0-9]+[[:space:]]*<\/guid>/)) {
+                g=substr(item, RSTART, RLENGTH)
+                sub(/.*>/,"",g)
+                sub(/<\/guid>.*/,"",g)
+                guid=g
+            }
 
-        if (length(id) >= 5 && length(title) > 0 && length(link) > 3) {
-            print id "|" title "|" link;
+            id=guid
+            if (id == "" && link ~ /post-[0-9]+-1/) {
+                id=link
+                sub(/.*post-/,"",id)
+                sub(/-1.*/,"",id)
+            }
+
+            if (length(id) > 0 && length(title) > 0 && length(link) > 0) {
+                gsub(/^[ \t]+|[ \t]+$/, "", title)
+                print id "|" title "|" link
+            }
         }
-    }' \
-    | head -n 60   # 稍微多取一些，防极端情况
+      ' \
+      | head -n 120
 }
+
 
 # ============================================
 # ✅ 关键词匹配函数
