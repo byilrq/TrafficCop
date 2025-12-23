@@ -355,22 +355,29 @@ print_latest() {
 
     local STATE_FILE="$WORK_DIR/last_node.txt"
     if [ ! -s "$STATE_FILE" ]; then
-        echo "暂无缓存，请先执行「手动更新（刷新缓存）」"
+        echo "暂无缓存，请先执行「手动刷新」"
         return
     fi
 
     echo -e "最新10条（最新在下）："
     local i=1
     tail -n 10 "$STATE_FILE" | while IFS= read -r line; do
-        local id title url
-        id=$(echo "$line" | awk -F'|' '{print $1}')
-        title=$(echo "$line" | awk -F'|' '{print $2}')
-        url=$(echo "$line" | awk -F'|' '{print $3}')
-        echo "${i}) [$id] $title"
+        local id title url sent
+        id=$(echo "$line"   | awk -F'|' '{print $1}')
+        title=$(echo "$line"| awk -F'|' '{print $2}')
+        url=$(echo "$line"  | awk -F'|' '{print $3}')
+        sent=$(echo "$line" | awk -F'|' '{print $4}')
+
+        [[ -z "$sent" ]] && sent="0"
+        local tag="未推送"
+        [[ "$sent" == "1" ]] && tag="已推送"
+
+        echo "${i}) [$id] ($tag) $title"
         echo "    $url"
         ((i++))
     done
 }
+
 
 # ============================================
 # 手动刷新：抓取最新帖子并更新缓存
@@ -408,20 +415,56 @@ manual_fresh() {
         return
     fi
 
-    cat "$STATE_FILE" <(echo "$posts") \
-        | awk -F'|' 'NF>=3 && $1!="" {print $0}' \
-        | awk -F'|' '!seen[$1]++' \
-        > "${STATE_FILE}.tmp"
+    # 合并逻辑：
+    # - 旧文件：id|title|url|sent
+    # - 新抓取：id|title|url    -> 默认 sent=0
+    # - 如果旧里 sent=1，则合并后仍为 1（不被覆盖）
+    # - 只保留最近 100 条（新在下）
+    awk -F'|' '
+      BEGIN{OFS="|"}
+      # 先读旧缓存：记录已推送状态
+      FNR==NR {
+        if (NF>=3 && $1!="") {
+          old_sent[$1] = (NF>=4 ? $4 : 0)
+          old_line[$1] = $1 OFS $2 OFS $3
+          order[++n] = $1
+        }
+        next
+      }
+      # 再读新 posts（只有3列）
+      {
+        if (NF>=3 && $1!="") {
+          new_line[$1] = $1 OFS $2 OFS $3
+          new_order[++m] = $1
+        }
+      }
+      END{
+        # 输出顺序：先旧后新（让新在文件末尾）
+        for (i=1;i<=n;i++){
+          id=order[i]
+          # 如果这个 id 在新里也出现了，用新标题/链接更新
+          if (id in new_line) {
+            line = new_line[id]
+          } else {
+            line = old_line[id]
+          }
+          sent = old_sent[id]
+          # 去重：只输出一次（按顺序首次输出）
+          if (!printed[id]++) print line, (sent==""?0:sent)
+        }
+        for (j=1;j<=m;j++){
+          id=new_order[j]
+          if (printed[id]) continue
+          line=new_line[id]
+          sent = (id in old_sent ? old_sent[id] : 0)
+          print line, (sent==""?0:sent)
+        }
+      }
+    ' "$STATE_FILE" <(echo "$posts") | tail -n 100 > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
 
-    if (( $(wc -l < "${STATE_FILE}.tmp") > 200 )); then
-        tail -n 200 "${STATE_FILE}.tmp" > "$STATE_FILE"
-        rm -f "${STATE_FILE}.tmp"
-    else
-        mv "${STATE_FILE}.tmp" "$STATE_FILE"
-    fi
-
-    echo "$(date '+%Y-%m-%d %H:%M:%S') [node] ✅ 最新帖子缓存已更新" >> "$LOG_FILE"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [node] ✅ 最新帖子缓存已更新（单文件sent标记，保留100条）" >> "$LOG_FILE"
 }
+
 
 # ============================================
 # 手动推送（关键词匹配）
@@ -503,73 +546,79 @@ auto_push() {
         return
     fi
 
-    local SENT_FILE="$WORK_DIR/sent_node_ids.txt"
-    [[ -f "$SENT_FILE" ]] || touch "$SENT_FILE"
-
     local lines=()
     while IFS= read -r line; do lines+=("$line"); done < "$STATE_FILE"
 
     local total=${#lines[@]}
     local start=$(( total > 30 ? total - 30 : 0 ))
-    local new_matched=()
 
     local nowlog
     nowlog=$(date '+%Y-%m-%d %H:%M:%S')
     echo "$nowlog [node] 当前关键词：$KEYWORDS" >> "$LOG_FILE"
     echo "$nowlog [node] 最新30条帖子匹配情况如下：" >> "$LOG_FILE"
 
+    local now_t
+    now_t=$(fmt_time)
+
+    local push_text=""
+    local ids_to_mark=()   # 需要标记为 sent=1 的 id
+
     for ((i=start; i<total; i++)); do
-        local id title url
-        id=$(echo "${lines[$i]}" | awk -F'|' '{print $1}')
-        title=$(echo "${lines[$i]}" | awk -F'|' '{print $2}')
-        url=$(echo "${lines[$i]}" | awk -F'|' '{print $3}')
+        local id title url sent
+        id=$(echo "${lines[$i]}"   | awk -F'|' '{print $1}')
+        title=$(echo "${lines[$i]}"| awk -F'|' '{print $2}')
+        url=$(echo "${lines[$i]}"  | awk -F'|' '{print $3}')
+        sent=$(echo "${lines[$i]}" | awk -F'|' '{print $4}')
+
+        [[ -z "$sent" ]] && sent="0"
+
+        # 已推送的不再推
+        if [[ "$sent" == "1" ]]; then
+            echo "$nowlog [node] 已推送过（跳过）：[$id] $title" >> "$LOG_FILE"
+            continue
+        fi
 
         local hit
         hit=$(match_title "$title")
 
         if [[ -n "$hit" ]]; then
-            if grep -Fxq "$id" "$SENT_FILE"; then
-                echo "$nowlog [node] 已推送过（跳过）：[$id] $title" >> "$LOG_FILE"
-            else
-                echo "$nowlog [node] 匹配 ✔：[$id] $title（命中：$hit）" >> "$LOG_FILE"
-                new_matched+=("${id}|${title}|${url}|${hit}")
-            fi
+            echo "$nowlog [node] 匹配 ✔：[$id] $title（命中：$hit）" >> "$LOG_FILE"
+
+            # ✅ 正确换行：用 $'\n'
+            push_text+="🎯node --🔎:【${hit}】"$'\n'
+            push_text+="🕒时间: ${now_t}"$'\n'
+            push_text+="🌐标题: ${title}"$'\n'
+            push_text+="🔗链接: ${url}"$'\n\n'
+
+            ids_to_mark+=("$id")
         else
             echo "$nowlog [node] 未匹配 ✖：[$id] $title" >> "$LOG_FILE"
         fi
     done
 
-    if [[ ${#new_matched[@]} -eq 0 ]]; then
+    if [[ ${#ids_to_mark[@]} -eq 0 ]]; then
         echo "$nowlog [node] ⚠️无匹配或均已推送过" >> "$LOG_FILE"
         return
     fi
 
-    local now_t
-    now_t=$(fmt_time)
-
-    local push_text=""
-    for x in "${new_matched[@]}"; do
-        local id title url hit
-        id=$(echo "$x" | awk -F'|' '{print $1}')
-        title=$(echo "$x" | awk -F'|' '{print $2}')
-        url=$(echo "$x" | awk -F'|' '{print $3}')
-        hit=$(echo "$x" | awk -F'|' '{print $4}')
-
-        # ✅ 第一行：不要写 "\n"，用 $'\n' 追加真正换行
-        push_text+="🎯node --🔎:【${hit}】"$'\n'
-        push_text+="🕒时间: ${now_t}"$'\n'
-        push_text+="🌐标题: ${title}"$'\n'
-        push_text+="🔗链接: ${url}"$'\n\n'
-    done
-
     tg_send "$push_text"
 
-    for x in "${new_matched[@]}"; do
-        echo "$x" | awk -F'|' '{print $1}' >> "$SENT_FILE"
-    done
+    # 推送成功后：把命中的 id 标记为 sent=1（仍保留100条）
+    awk -F'|' -v OFS='|' -v ids="$(printf "%s," "${ids_to_mark[@]}")" '
+      BEGIN{
+        split(ids, a, ",")
+        for (i in a) if (a[i]!="") mark[a[i]]=1
+      }
+      {
+        id=$1; title=$2; url=$3; sent=(NF>=4?$4:0)
+        if (id in mark) sent=1
+        print id, title, url, sent
+      }
+    ' "$STATE_FILE" | tail -n 100 > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
 
-    echo "$nowlog [node] 📩 自动推送成功（${#new_matched[@]} 条）" >> "$LOG_FILE"
+    echo "$nowlog [node] 📩 自动推送成功（${#ids_to_mark[@]} 条），已在 last_node.txt 标记 sent=1" >> "$LOG_FILE"
 }
+
 
 # ============================================
 # 测试 Telegram 推送（真换行）
@@ -651,7 +700,7 @@ if [[ "$1" == "-cron" ]]; then
 
         trim_file "$CRON_LOG"
         trim_file "$LOG_FILE"
-        trim_file "$WORK_DIR/sent_node_ids.txt"
+        trim_file "$WORK_DIR/last_node.txt"
 
         echo "$(date '+%Y-%m-%d %H:%M:%S') ▶️ 执行 manual_fresh()" >> "$CRON_LOG"
         manual_fresh >/dev/null 2>&1
