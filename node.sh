@@ -239,57 +239,57 @@ fetch_node_rss() {
 # ============================================
 extract_posts() {
     local xml="$1"
-
-    if echo "$xml" | grep -qiE "Just a moment|cf-turnstile|challenge-platform|captcha"; then
+    if echo "$xml" | grep -qiE "Just a moment|cf-turnstile|challenge-platform|captcha|Ray ID"; then
         echo "__BLOCKED__"
         return 0
     fi
 
     echo "$xml" \
-      | tr '\n' ' ' \
-      | sed 's/<item/\n<item/g' \
-      | awk '
-        BEGIN{IGNORECASE=1}
-        /<item/{
-          item=$0
-          title=""; link=""; guid=""
+    | tr '\n' ' ' \
+    | sed 's/<item/\n<item/g' \
+    | awk '
+    BEGIN { IGNORECASE=1 }
+    /<item/ {
+        item = $0; title=""; link=""; guid=""; id="";
 
-          if (match(item, /<title><!\[CDATA\[[^]]+\]\]><\/title>/)) {
-            t=substr(item, RSTART, RLENGTH)
-            sub(/.*<title><!\[CDATA\[/,"",t); sub(/\]\]><\/title>.*/,"",t)
-            title=t
-          } else if (match(item, /<title>[^<]+<\/title>/)) {
-            t=substr(item, RSTART, RLENGTH)
-            sub(/.*<title>/,"",t); sub(/<\/title>.*/,"",t)
-            title=t
-          }
-
-          if (match(item, /<link>[^<]+<\/link>/)) {
-            l=substr(item, RSTART, RLENGTH)
-            sub(/.*<link>/,"",l); sub(/<\/link>.*/,"",l)
-            link=l
-          }
-
-          if (match(item, /<guid[^>]*>[^<]+<\/guid>/)) {
-            g=substr(item, RSTART, RLENGTH)
-            sub(/.*>/,"",g); sub(/<\/guid>.*/,"",g)
-            guid=g
-          }
-
-          id=guid
-          if (id == "" && link ~ /post-[0-9]+-1/) {
-            id=link
-            sub(/.*post-/,"",id)
-            sub(/-1.*/,"",id)
-          }
-
-          if (length(id) > 0 && length(title) > 0 && length(link) > 0) {
-            gsub(/^[ \t\r\n]+|[ \t\r\n]+$/, "", title)
-            print id "|" title "|" link
-          }
+        # Title - 支持 CDATA 和普通文本
+        if (match(item, /<title>(<!\[CDATA\[)?([^<>\]]+)(]]>)?<\/title>/)) {
+            title = substr(item, RSTART, RLENGTH);
+            gsub(/.*<title>(<!\[CDATA\[)?/,"",title);
+            gsub(/(]]>)?<\/title>.*/,"",title);
+            gsub(/^[ \t]+|[ \t]+$/, "", title);
+            gsub(/\|/,"｜",title);  # 防 title 内 | 破坏字段
         }
-      ' \
-      | head -n 50
+
+        # Link
+        if (match(item, /<link>[^<]+<\/link>/)) {
+            link = substr(item, RSTART, RLENGTH);
+            sub(/.*<link>/,"",link); sub(/<\/link>.*/,"",link);
+            gsub(/^[ \t]+|[ \t]+$/, "", link);
+        }
+
+        # GUID 提取 - 关键修复：正确处理带属性的 guid
+        if (match(item, /<guid[^>]*>([^<]+)<\/guid>/)) {
+            guid_raw = substr(item, RSTART, RLENGTH);
+            sub(/.*<guid[^>]*>/, "", guid_raw);
+            sub(/<\/guid>.*/, "", guid_raw);
+            gsub(/[^0-9]/, "", guid_raw);  # 只保留数字
+            if (length(guid_raw) >= 5) id = guid_raw;
+        }
+
+        # 仅当 guid 失败才回退到 link（优先级：guid > link）
+        if (id == "" && link ~ /post-[0-9]+-1/) {
+            id = link;
+            sub(/.*post-/, "", id);
+            sub(/-1.*/, "", id);
+            gsub(/[^0-9]/, "", id);
+        }
+
+        if (length(id) >= 5 && length(title) > 0 && length(link) > 3) {
+            print id "|" title "|" link;
+        }
+    }' \
+    | head -n 60   # 稍微多取一些，防极端情况
 }
 
 # ============================================
@@ -384,7 +384,6 @@ print_latest() {
 # ============================================
 manual_fresh() {
     read_config || return
-
     local STATE_FILE="$WORK_DIR/last_node.txt"
     [[ -f "$STATE_FILE" ]] || touch "$STATE_FILE"
 
@@ -396,7 +395,6 @@ manual_fresh() {
         echo "$(date '+%Y-%m-%d %H:%M:%S') [node] ℹ️ RSS未更新（304 Not Modified）" >> "$LOG_FILE"
         return
     fi
-
     if [[ $rc -ne 0 || -z "$xml" ]]; then
         echo "$(date '+%Y-%m-%d %H:%M:%S') [node] ❌ 获取RSS失败或为空" >> "$LOG_FILE"
         return
@@ -406,64 +404,77 @@ manual_fresh() {
     posts=$(extract_posts "$xml")
 
     if [[ "$posts" == "__BLOCKED__" ]]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') [node] ⚠️ 可能被挑战页拦截（Just a moment / captcha）" >> "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [node] ⚠️ 可能被挑战页拦截" >> "$LOG_FILE"
         return
     fi
-
     if [[ -z "$posts" ]]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') [node] ❌ 未提取到帖子（RSS结构变化或被拦截）" >> "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [node] ❌ 未提取到帖子" >> "$LOG_FILE"
         return
     fi
 
-    # 合并逻辑：
-    # - 旧文件：id|title|url|sent
-    # - 新抓取：id|title|url    -> 默认 sent=0
-    # - 如果旧里 sent=1，则合并后仍为 1（不被覆盖）
-    # - 只保留最近 100 条（新在下）
-    awk -F'|' '
-      BEGIN{OFS="|"}
-      # 先读旧缓存：记录已推送状态
-      FNR==NR {
-        if (NF>=3 && $1!="") {
-          old_sent[$1] = (NF>=4 ? $4 : 0)
-          old_line[$1] = $1 OFS $2 OFS $3
-          order[++n] = $1
-        }
-        next
-      }
-      # 再读新 posts（只有3列）
-      {
-        if (NF>=3 && $1!="") {
-          new_line[$1] = $1 OFS $2 OFS $3
-          new_order[++m] = $1
-        }
-      }
-      END{
-        # 输出顺序：先旧后新（让新在文件末尾）
-        for (i=1;i<=n;i++){
-          id=order[i]
-          # 如果这个 id 在新里也出现了，用新标题/链接更新
-          if (id in new_line) {
-            line = new_line[id]
-          } else {
-            line = old_line[id]
-          }
-          sent = old_sent[id]
-          # 去重：只输出一次（按顺序首次输出）
-          if (!printed[id]++) print line, (sent==""?0:sent)
-        }
-        for (j=1;j<=m;j++){
-          id=new_order[j]
-          if (printed[id]) continue
-          line=new_line[id]
-          sent = (id in old_sent ? old_sent[id] : 0)
-          print line, (sent==""?0:sent)
-        }
-      }
-    ' "$STATE_FILE" <(echo "$posts") | tail -n 100 > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
+    # ✅ 严格合并：新抓取覆盖旧title/url；sent(第4列0/1)保留；严格去重；只保留最近200条
+    # 不用 -v newposts=... 传多行，避免奇怪重复/转义问题
+    local NP_FILE="$WORK_DIR/.tmp_newposts"
+    printf "%s\n" "$posts" > "$NP_FILE"
 
-    echo "$(date '+%Y-%m-%d %H:%M:%S') [node] ✅ 最新帖子缓存已更新（单文件sent标记，保留100条）" >> "$LOG_FILE"
+    awk -F'|' '
+    BEGIN { OFS="|" }
+
+    # 第一份输入：新抓取 posts（3列：id|title|url）
+    FNR==NR {
+        if (NF < 3 || $1 == "") next
+        id=$1
+        new_title[id]=$2
+        new_url[id]=$3
+        next
+    }
+
+    # 第二份输入：旧缓存（3或4列：id|title|url|sent）
+    {
+        if (NF < 3 || $1 == "") next
+        id=$1
+
+        old_sent="0"
+        if (NF >= 4 && $4 ~ /^[01]$/) old_sent=$4
+
+        title=$2
+        url=$3
+
+        # 若新抓取里存在该id，用新title/url覆盖旧
+        if (id in new_title) {
+            title=new_title[id]
+            url=new_url[id]
+        }
+
+        final_title[id]=title
+        final_url[id]=url
+        sent[id]=old_sent
+        seen_old[id]=1
+    }
+
+    END {
+        # 补充：旧缓存里没有的新帖子（sent=0）
+        for (id in new_title) {
+            if (!(id in final_title)) {
+                final_title[id]=new_title[id]
+                final_url[id]=new_url[id]
+                sent[id]="0"
+            }
+        }
+
+        # 输出：按 id 数字升序（GNU awk）
+        PROCINFO["sorted_in"]="@ind_num_asc"
+        for (id in final_title) {
+            print id, final_title[id], final_url[id], sent[id]
+        }
+    }' "$NP_FILE" "$STATE_FILE" \
+    | tail -n 200 > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
+
+    rm -f "$NP_FILE"
+
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [node] ✅ 缓存更新完成（严格去重，保留sent标记，最新200条）" >> "$LOG_FILE"
 }
+
 
 
 # ============================================
