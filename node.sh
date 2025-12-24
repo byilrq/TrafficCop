@@ -534,10 +534,10 @@ manual_push() {
         url=$(echo "$x" | awk -F'|' '{print $3}')
         hit=$(echo "$x" | awk -F'|' '{print $4}')
 
-        push_text+=$'🎯node --🔎:【'"${hit}"'】\n'
-        push_text+=$'🕒时间: '"${now_t}"$'\n'
-        push_text+=$'🌐标题: '"${title}"$'\n'
-        push_text+=$'🔗链接: '"${url}"$'\n\n'
+        push_text+=$'🌐node --🎯:【'"${hit}"'】\n'
+        push_text+=$'📆时间: '"${now_t}"$'\n'
+        push_text+=$'🔖标题: '"${title}"$'\n'
+        push_text+=$'🧬链接: '"${url}"$'\n\n'
     done
 
     tg_send "$push_text"
@@ -600,10 +600,10 @@ auto_push() {
             echo "$nowlog [node] 匹配 ✔：[$id] $title（命中：$hit）" >> "$LOG_FILE"
 
             # ✅ 正确换行：用 $'\n'
-            push_text+="🎯node --🔎:【${hit}】"$'\n'
-            push_text+="🕒时间: ${now_t}"$'\n'
-            push_text+="🌐标题: ${title}"$'\n'
-            push_text+="🔗链接: ${url}"$'\n\n'
+            push_text+="🌐node --🎯:【${hit}】"$'\n'
+            push_text+="📆时间: ${now_t}"$'\n'
+            push_text+="🔖标题: ${title}"$'\n'
+            push_text+="🧬链接: ${url}"$'\n\n'
 
             ids_to_mark+=("$id")
         else
@@ -645,10 +645,10 @@ test_notification() {
     now_t=$(fmt_time)
 
     local msg=""
-    msg+=$'🎯node\n'
-    msg+=$'🕒时间: '"${now_t}"$'\n'
-    msg+=$'🌐标题: 这是来自脚本的测试推送\n'
-    msg+=$'🔗链接: https://www.nodeseek.com/?sortBy=postTime'
+    msg+=$'🌐node\n'
+    msg+=$'📆时间: '"${now_t}"$'\n'
+    msg+=$'🔖标题: 这是来自脚本的测试推送\n'
+    msg+=$'🧬链接: https://www.nodeseek.com/?sortBy=postTime'
 
     tg_send "$msg"
     echo -e "${GREEN}✅ Telegram 测试推送已发送（请到私聊查看）${PLAIN}"
@@ -682,7 +682,7 @@ log_rotate() {
 # 内置 flock 锁，避免重复启动
 # ============================================
 if [[ "$1" == "-cron" ]]; then
-    LOCK_FILE="$WORK_DIR/node.lock"
+    LOCK_FILE="$WORK_DIR/.node.lock"
     exec 200>"$LOCK_FILE"
     flock -n 200 || exit 0
 
@@ -730,7 +730,7 @@ if [[ "$1" == "-cron" ]]; then
         sleep_time=$((INTERVAL - elapsed))
         (( sleep_time < 1 )) && sleep_time=1
 
-        echo "$(date '+%Y-%m-%d %H:%M:%S') 🕒 等待${sleep_time}秒进入下次周期..." >> "$CRON_LOG"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') 📆 等待${sleep_time}秒进入下次周期..." >> "$CRON_LOG"
         echo "" >> "$CRON_LOG"
 
         sleep "$sleep_time"
