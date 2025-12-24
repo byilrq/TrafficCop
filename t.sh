@@ -63,9 +63,8 @@ install_tg_notifier() {
 
 # 安装PushPlus通知
 install_pushplus() {
-
     echo -e "${CYAN}正在安装PushPlus通知功能...${NC}"
-    install_script "pushplus.shh"
+    install_script "pushplus.sh"
     run_script "$WORK_DIR/pushplus.sh"
     echo -e "${GREEN} pushplus.sh执行完毕！${NC}"
     read -p "按回车键继续..."
