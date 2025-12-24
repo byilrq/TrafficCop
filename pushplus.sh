@@ -30,17 +30,38 @@ CYAN="\033[36m"
 WHITE="\033[37m"
 PLAIN="\033[0m"
 
-echo "----------------------------------------------" | tee -a "$CRON_LOG"
-echo "$(date '+%Y-%m-%d %H:%M:%S') : 启动 PushPlus 通知脚本 (TrafficCop 版)" | tee -a "$CRON_LOG"
-
 cd "$WORK_DIR" || exit 1
+
+# ==================== 日志裁剪：只保留最近100行 ====================
+trim_cron_log() {
+    local file="$CRON_LOG"
+    local max_lines=100
+    [[ -f "$file" ]] || return 0
+
+    local cnt
+    cnt=$(wc -l < "$file" 2>/dev/null || echo 0)
+
+    if (( cnt > max_lines )); then
+        tail -n "$max_lines" "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
+    fi
+}
+
+log_cron() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') : $*" | tee -a "$CRON_LOG" >/dev/null
+    trim_cron_log
+}
+
+# 这两行原来就在最顶部写日志，但会绕过裁剪；现在补一刀 trim
+echo "----------------------------------------------" | tee -a "$CRON_LOG" >/dev/null
+trim_cron_log
+log_cron "启动 PushPlus 通知脚本 (TrafficCop 版)"
 
 # ============================================
 # 防止重复运行
 # ============================================
 check_running() {
     if pidof -x "$(basename "$0")" -o $$ >/dev/null 2>&1; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : 已有实例运行，退出。" | tee -a "$CRON_LOG"
+        log_cron "已有实例运行，退出。"
         exit 1
     fi
 }
@@ -50,13 +71,13 @@ check_running() {
 # ============================================
 read_config() {
     if [ ! -s "$CONFIG_FILE" ]; then
-        echo "PushPlus 配置文件不存在或为空。" | tee -a "$CRON_LOG"
+        log_cron "PushPlus 配置文件不存在或为空。"
         return 1
     fi
     # shellcheck disable=SC1090
     source "$CONFIG_FILE"
     if [ -z "$PUSHPLUS_TOKEN" ] || [ -z "$MACHINE_NAME" ] || [ -z "$DAILY_REPORT_TIME" ] || [ -z "$EXPIRE_DATE" ]; then
-        echo "PushPlus 配置不完整。" | tee -a "$CRON_LOG"
+        log_cron "PushPlus 配置不完整。"
         return 1
     fi
     return 0
@@ -69,7 +90,7 @@ DAILY_REPORT_TIME="$DAILY_REPORT_TIME"
 MACHINE_NAME="$MACHINE_NAME"
 EXPIRE_DATE="$EXPIRE_DATE"
 EOF
-    echo "配置已保存到 $CONFIG_FILE" | tee -a "$CRON_LOG"
+    log_cron "配置已保存到 $CONFIG_FILE"
 }
 
 # ============================================
@@ -77,14 +98,14 @@ EOF
 # ============================================
 read_traffic_config() {
     if [ ! -s "$TRAFFIC_CONFIG" ]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : ❌ 找不到 TrafficCop 配置文件: $TRAFFIC_CONFIG" | tee -a "$CRON_LOG"
+        log_cron "❌ 找不到 TrafficCop 配置文件: $TRAFFIC_CONFIG"
         return 1
     fi
     # shellcheck disable=SC1090
     source "$TRAFFIC_CONFIG"
     # 关键变量简单校验
     if [ -z "$MAIN_INTERFACE" ] || [ -z "$TRAFFIC_MODE" ] || [ -z "$TRAFFIC_LIMIT" ] || [ -z "$TRAFFIC_TOLERANCE" ]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : ❌ TrafficCop 配置不完整。" | tee -a "$CRON_LOG"
+        log_cron "❌ TrafficCop 配置不完整。"
         return 1
     fi
     return 0
@@ -195,10 +216,10 @@ EOF
     local response
     response=$(curl -s -X POST "$url" -H "Content-Type: application/json" -d "$payload")
     if echo "$response" | grep -q '"code":200'; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : ✅ 推送成功 ($title)" | tee -a "$CRON_LOG"
+        log_cron "✅ 推送成功 ($title)"
         return 0
     else
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : ❌ 推送失败 ($title) 响应: $response" | tee -a "$CRON_LOG"
+        log_cron "❌ 推送失败 ($title) 响应: $response"
         return 1
     fi
 }
@@ -327,16 +348,17 @@ get_period_end_date() {
 }
 
 # ============================================
-# 每日报告（保持原始 5 行格式）
+# 每日报告（增加 💾空间 行）
 # ============================================
 daily_report() {
     if ! read_traffic_config; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : ❌ 无法读取 TrafficCop 配置，放弃发送每日报告。" | tee -a "$CRON_LOG"
+        log_cron "❌ 无法读取 TrafficCop 配置，放弃发送每日报告。"
         return 1
     fi
 
     local current_usage period_start period_end limit
     local today expire_formatted expire_ts today_ts diff_days diff_emoji
+    local disk_used disk_total disk_pct disk_line
 
     # 本期已用流量（已经减去 offset）
     current_usage=$(get_traffic_usage 2>/dev/null || echo "0.000")
@@ -384,6 +406,17 @@ daily_report() {
         fi
     fi
 
+    # ===== 💾 硬盘使用情况（根分区 /）：只生成 “已用/总量 (百分比)” =====
+    disk_used=$(df -hP / 2>/dev/null | awk 'NR==2{print $3}')
+    disk_total=$(df -hP / 2>/dev/null | awk 'NR==2{print $2}')
+    disk_pct=$(df -hP / 2>/dev/null | awk 'NR==2{print $5}')
+
+    if [[ -n "$disk_used" && -n "$disk_total" && -n "$disk_pct" ]]; then
+        disk_line="${disk_used}/${disk_total} (${disk_pct})"
+    else
+        disk_line="未知"
+    fi
+
     local title content
     title="🎯 [${MACHINE_NAME}] 流量统计"
 
@@ -392,15 +425,15 @@ daily_report() {
     content+="${diff_emoji}剩余：${diff_days}\n"
     content+="🔄周期：${period_start} 到 ${period_end}\n"
     content+="⌛已用：${current_usage} GB\n"
-    content+="🌐套餐：${limit}"
+    content+="🌐套餐：${limit}\n"
+    content+="💾空间：${disk_line}"
 
     if pushplus_send "$title" "$content"; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : ✅ 每日报告推送成功（已用 ${current_usage} GB）" | tee -a "$CRON_LOG"
+        log_cron "✅ 每日报告推送成功（已用 ${current_usage} GB）"
     else
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : ❌ 每日报告推送失败" | tee -a "$CRON_LOG"
+        log_cron "❌ 每日报告推送失败"
     fi
 }
-
 
 # ============================================
 # 打印实时流量信息（终端）
@@ -435,16 +468,16 @@ get_current_traffic() {
 # 停止 PushPlus 功能
 # ============================================
 pushplus_stop() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') : 开始停止 PushPlus 推送功能。" | tee -a "$CRON_LOG"
+    log_cron "开始停止 PushPlus 推送功能。"
 
     if crontab -l 2>/dev/null | grep -q "$SCRIPT_PATH -cron"; then
         crontab -l 2>/dev/null | grep -v "$SCRIPT_PATH -cron" | crontab -
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : ✅ Crontab 定时任务已移除。" | tee -a "$CRON_LOG"
+        log_cron "✅ Crontab 定时任务已移除。"
     else
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : ℹ️ 未发现相关 Crontab 条目。" | tee -a "$CRON_LOG"
+        log_cron "ℹ️ 未发现相关 Crontab 条目。"
     fi
 
-    echo "$(date '+%Y-%m-%d %H:%M:%S') : ✅ PushPlus 推送功能已停止（如需重新启用请再次运行脚本）。" | tee -a "$CRON_LOG"
+    log_cron "✅ PushPlus 推送功能已停止（如需重新启用请再次运行脚本）。"
     exit 0
 }
 
@@ -454,7 +487,7 @@ pushplus_stop() {
 setup_cron() {
     local entry="* * * * * $SCRIPT_PATH -cron"
     (crontab -l 2>/dev/null | grep -v "$SCRIPT_PATH -cron" | grep -v "pushplus_notifier.sh" ; echo "$entry") | crontab -
-    echo "$(date '+%Y-%m-%d %H:%M:%S') : ✅ Crontab 已更新：每分钟检查一次，按设定时间发送每日报告。" | tee -a "$CRON_LOG"
+    log_cron "✅ Crontab 已更新：每分钟检查一次，按设定时间发送每日报告。"
 }
 
 # ============================================
@@ -466,24 +499,24 @@ main() {
     if [[ "$*" == *"-cron"* ]]; then
         # Cron 模式：每分钟跑一次，只在指定时间发日报
         if ! read_config; then
-            echo "$(date '+%Y-%m-%d %H:%M:%S') : PushPlus 配置不完整，跳过 cron 执行。" | tee -a "$CRON_LOG"
+            log_cron "PushPlus 配置不完整，跳过 cron 执行。"
             exit 1
         fi
         local current_time
         current_time=$(date +%H:%M)
-        echo "$(date '+%Y-%m-%d %H:%M:%S') : cron 模式，当前时间: $current_time，设定报告时间: $DAILY_REPORT_TIME" | tee -a "$CRON_LOG"
+        log_cron "cron 模式，当前时间: $current_time，设定报告时间: $DAILY_REPORT_TIME"
 
         if [ "$current_time" = "$DAILY_REPORT_TIME" ]; then
             # 每天第一次命中时可以考虑清空日志
             echo "$(date '+%Y-%m-%d %H:%M:%S') : 时间匹配，开始发送每日报告。" >"$CRON_LOG"
             daily_report
         else
-            echo "$(date '+%Y-%m-%d %H:%M:%S') : 时间未到每日报告点，不发送。" | tee -a "$CRON_LOG"
+            log_cron "时间未到每日报告点，不发送。"
         fi
     else
         # 交互菜单模式
         if ! read_config; then
-            echo "$(date '+%Y-%m-%d %H:%M:%S') : 未检测到完整配置，将进行初始化。" | tee -a "$CRON_LOG"
+            log_cron "未检测到完整配置，将进行初始化。"
             initial_config
         fi
         setup_cron
@@ -506,7 +539,7 @@ main() {
                 1) daily_report ;;
                 2) test_pushplus_notification ;;
                 3) get_current_traffic ;;
-                4) initial_config ;;  
+                4) initial_config ;;
                 5) pushplus_stop ;;
                 0) exit 0 ;;
             esac
