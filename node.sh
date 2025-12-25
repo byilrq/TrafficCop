@@ -2,6 +2,10 @@
 # ============================================
 # Node 最新帖子监控脚本
 # 更新时间：2025-12-21
+# 修复点：
+# 1) 不再依赖 gawk 的 PROCINFO["sorted_in"] 排序（Debian 常见 awk=mawk 会乱序）
+#    -> 统一用 sort -n -t'|' -k1,1 做稳定排序
+# 2) -cron 是常驻 while true 进程：修改脚本后务必 stop_cron 再启动，否则老进程仍用旧逻辑写文件
 # ============================================
 
 export LANG=C.UTF-8
@@ -295,7 +299,6 @@ extract_posts() {
       | head -n 120
 }
 
-
 # ============================================
 # ✅ 关键词匹配函数
 # 规则：
@@ -314,7 +317,6 @@ match_title() {
 
     local token
     for token in $KEYWORDS; do
-        # 去掉 token 两侧空白
         token=$(echo "$token" | awk '{$1=$1;print}')
         [[ -z "$token" ]] && continue
 
@@ -323,7 +325,6 @@ match_title() {
 
         # 双关键词 AND：a&b
         if [[ "$token_lower" == *"&"* ]]; then
-            # 允许写成 a&b 或 a & b：先删除空格再切
             local t
             t=$(echo "$token_lower" | tr -d ' ')
             local a b
@@ -337,7 +338,6 @@ match_title() {
                 return
             fi
         else
-            # 单关键词
             if [[ "$title_lower" == *"$token_lower"* ]]; then
                 echo "$token_lower"
                 return
@@ -382,9 +382,8 @@ print_latest() {
     done
 }
 
-
 # ============================================
-# 手动刷新：抓取最新帖子并更新缓存
+# 手动刷新：抓取最新帖子并更新缓存（✅稳定排序版）
 # ============================================
 manual_fresh() {
     read_config || return
@@ -416,24 +415,17 @@ manual_fresh() {
         return
     fi
 
-    # ✅ 严格合并：新抓取覆盖旧title/url；sent(第4列0/1)保留；严格去重；只保留最近200条
-    # 不用 -v newposts=... 传多行，避免奇怪重复/转义问题
     local NP_FILE="$WORK_DIR/.tmp_newposts"
     printf "%s\n" "$posts" > "$NP_FILE"
 
-    awk -F'|' '
-    BEGIN { OFS="|" }
-
-    # 第一份输入：新抓取 posts（3列：id|title|url）
-    FNR==NR {
+    awk -F'|' 'BEGIN{OFS="|"}
+    FNR==NR{
         if (NF < 3 || $1 == "") next
         id=$1
         new_title[id]=$2
         new_url[id]=$3
         next
     }
-
-    # 第二份输入：旧缓存（3或4列：id|title|url|sent）
     {
         if (NF < 3 || $1 == "") next
         id=$1
@@ -444,7 +436,6 @@ manual_fresh() {
         title=$2
         url=$3
 
-        # 若新抓取里存在该id，用新title/url覆盖旧
         if (id in new_title) {
             title=new_title[id]
             url=new_url[id]
@@ -453,11 +444,8 @@ manual_fresh() {
         final_title[id]=title
         final_url[id]=url
         sent[id]=old_sent
-        seen_old[id]=1
     }
-
-    END {
-        # 补充：旧缓存里没有的新帖子（sent=0）
+    END{
         for (id in new_title) {
             if (!(id in final_title)) {
                 final_title[id]=new_title[id]
@@ -465,21 +453,17 @@ manual_fresh() {
                 sent[id]="0"
             }
         }
-
-        # 输出：按 id 数字升序（GNU awk）
-        PROCINFO["sorted_in"]="@ind_num_asc"
         for (id in final_title) {
             print id, final_title[id], final_url[id], sent[id]
         }
     }' "$NP_FILE" "$STATE_FILE" \
+    | LC_ALL=C sort -n -t'|' -k1,1 \
     | tail -n 200 > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
 
     rm -f "$NP_FILE"
 
-    echo "$(date '+%Y-%m-%d %H:%M:%S') [node] ✅ 缓存更新完成（严格去重，保留sent标记，最新200条）" >> "$LOG_FILE"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [node] ✅ 缓存更新完成（严格去重，保留sent标记，稳定排序，最新200条）" >> "$LOG_FILE"
 }
-
-
 
 # ============================================
 # 手动推送（关键词匹配）
@@ -545,7 +529,7 @@ manual_push() {
 }
 
 # ============================================
-# 自动推送（cron）—— 匹配关键词且只推送一次
+# 自动推送（cron）—— 匹配关键词且只推送一次（✅稳定排序版）
 # ============================================
 auto_push() {
     read_config || return
@@ -576,7 +560,7 @@ auto_push() {
     now_t=$(fmt_time)
 
     local push_text=""
-    local ids_to_mark=()   # 需要标记为 sent=1 的 id
+    local ids_to_mark=()
 
     for ((i=start; i<total; i++)); do
         local id title url sent
@@ -587,7 +571,6 @@ auto_push() {
 
         [[ -z "$sent" ]] && sent="0"
 
-        # 已推送的不再推
         if [[ "$sent" == "1" ]]; then
             echo "$nowlog [node] 已推送过（跳过）：[$id] $title" >> "$LOG_FILE"
             continue
@@ -599,7 +582,6 @@ auto_push() {
         if [[ -n "$hit" ]]; then
             echo "$nowlog [node] 匹配 ✔：[$id] $title（命中：$hit）" >> "$LOG_FILE"
 
-            # ✅ 正确换行：用 $'\n'
             push_text+="🎯node:【${hit}】"$'\n'
             push_text+="📆时间: ${now_t}"$'\n'
             push_text+="🔖标题: ${title}"$'\n'
@@ -618,7 +600,6 @@ auto_push() {
 
     tg_send "$push_text"
 
-    # 推送成功后：把命中的 id 标记为 sent=1（仍保留100条）
     awk -F'|' -v OFS='|' -v ids="$(printf "%s," "${ids_to_mark[@]}")" '
       BEGIN{
         split(ids, a, ",")
@@ -629,11 +610,12 @@ auto_push() {
         if (id in mark) sent=1
         print id, title, url, sent
       }
-    ' "$STATE_FILE" | tail -n 100 > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
+    ' "$STATE_FILE" \
+    | LC_ALL=C sort -n -t'|' -k1,1 \
+    | tail -n 100 > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
 
-    echo "$nowlog [node] 📩 自动推送成功（${#ids_to_mark[@]} 条），已在 last_node.txt 标记 sent=1" >> "$LOG_FILE"
+    echo "$nowlog [node] 📩 自动推送成功（${#ids_to_mark[@]} 条），已在 last_node.txt 标记 sent=1（稳定排序）" >> "$LOG_FILE"
 }
-
 
 # ============================================
 # 测试 Telegram 推送（真换行）
@@ -675,6 +657,47 @@ log_rotate() {
         done
         echo "$today" > "$state_file"
     fi
+}
+
+# ============================================
+# 设置定时任务（cron 每分钟触发一次，脚本内部自循环）
+# ============================================
+setup_cron() {
+    local entry="* * * * * /root/TrafficCop/node.sh -cron"
+    echo "🛠 正在检查并更新 node 定时任务（cron直跑，无 flock 包装）..."
+
+    crontab -l 2>/dev/null \
+        | grep -v "node.sh -cron" \
+        | grep -v "/usr/bin/flock -n /tmp/node.lock" \
+        > /tmp/cron.node.tmp || true
+
+    {
+        cat /tmp/cron.node.tmp
+        echo "$entry"
+    } | crontab -
+
+    rm -f /tmp/cron.node.tmp
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ node cron 已更新为：$entry" | tee -a "$CRON_LOG"
+}
+
+# ============================================
+# 关闭定时任务（杀掉常驻 -cron 进程 + 从 crontab 移除）
+# ============================================
+stop_cron() {
+    echo -e "${YELLOW}⏳ 正在停止 node 定时任务...${PLAIN}"
+
+    pkill -f "node.sh -cron" 2>/dev/null || true
+    sleep 1
+    pkill -f "node.sh -cron" 2>/dev/null || true
+
+    crontab -l 2>/dev/null \
+        | grep -v "node.sh -cron" \
+        | grep -v "/usr/bin/flock -n /tmp/node.lock" \
+        | crontab - 2>/dev/null
+
+    echo -e "${GREEN}✔ 已从 crontab 中移除 node 定时任务${PLAIN}"
+    systemctl restart cron 2>/dev/null || service cron restart 2>/dev/null
+    echo -e "${GREEN}✔ node 定时监控已完全停止${PLAIN}"
 }
 
 # ============================================
@@ -737,45 +760,6 @@ if [[ "$1" == "-cron" ]]; then
     done
     exit 0
 fi
-
-# ============================================
-# 设置定时任务（cron 每分钟触发一次，脚本内部自循环）
-# ============================================
-setup_cron() {
-    local entry="* * * * * /root/TrafficCop/node.sh -cron"
-    echo "🛠 正在检查并更新 node 定时任务（cron直跑，无 flock 包装）..."
-
-    crontab -l 2>/dev/null \
-        | grep -v "node.sh -cron" \
-        | grep -v "/usr/bin/flock -n /tmp/node.lock" \
-        > /tmp/cron.node.tmp || true
-
-    {
-        cat /tmp/cron.node.tmp
-        echo "$entry"
-    } | crontab -
-
-    rm -f /tmp/cron.node.tmp
-    echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ node cron 已更新为：$entry" | tee -a "$CRON_LOG"
-}
-
-# ============================================
-# 关闭定时任务
-# ============================================
-stop_cron() {
-    echo -e "${YELLOW}⏳ 正在停止 node 定时任务...${PLAIN}"
-
-    pkill -f "node.sh -cron" 2>/dev/null
-
-    crontab -l 2>/dev/null \
-        | grep -v "node.sh -cron" \
-        | grep -v "/usr/bin/flock -n /tmp/node.lock" \
-        | crontab - 2>/dev/null
-
-    echo -e "${GREEN}✔ 已从 crontab 中移除 node 定时任务${PLAIN}"
-    systemctl restart cron 2>/dev/null || service cron restart 2>/dev/null
-    echo -e "${GREEN}✔ node 定时监控已完全停止${PLAIN}"
-}
 
 # ============================================
 # 主菜单
