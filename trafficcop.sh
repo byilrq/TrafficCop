@@ -77,74 +77,123 @@ get_main_interface() {
 }
 
 # 初始配置
+# 初始配置
 initial_config() {
     MAIN_INTERFACE=$(get_main_interface)
+
     while :; do
         echo "1. 出站  2. 进站  3. 总和  4. 出入较大者"
         read -p "选择流量统计模式 (1-4): " c
-        case $c in 1) TRAFFIC_MODE=out; break;; 2) TRAFFIC_MODE=in; break;; 3) TRAFFIC_MODE=total; break;; 4) TRAFFIC_MODE=max; break;; esac
+        case $c in
+            1) TRAFFIC_MODE=out; break ;;
+            2) TRAFFIC_MODE=in; break ;;
+            3) TRAFFIC_MODE=total; break ;;
+            4) TRAFFIC_MODE=max; break ;;
+        esac
     done
-    read -p "统计周期 (m/q/y，默认为m): " p; TRAFFIC_PERIOD=${p:-monthly}; TRAFFIC_PERIOD=$(echo "$TRAFFIC_PERIOD" | cut -c1)
+
+    read -p "统计周期 (m/q/y，默认为m): " p
+    TRAFFIC_PERIOD=${p:-monthly}
+    TRAFFIC_PERIOD=$(echo "$TRAFFIC_PERIOD" | cut -c1)
     [ "$TRAFFIC_PERIOD" = "q" ] && TRAFFIC_PERIOD=quarterly
     [ "$TRAFFIC_PERIOD" = "y" ] && TRAFFIC_PERIOD=yearly
     [ "$TRAFFIC_PERIOD" != "quarterly" ] && [ "$TRAFFIC_PERIOD" != "yearly" ] && TRAFFIC_PERIOD=monthly
-    read -p "周期起始日 (1-31，默认为1): " PERIOD_START_DAY; PERIOD_START_DAY=${PERIOD_START_DAY:-1}
+
+    read -p "周期起始日 (1-31，默认为1): " PERIOD_START_DAY
+    PERIOD_START_DAY=${PERIOD_START_DAY:-1}
     [[ ! $PERIOD_START_DAY =~ ^[1-9]$|^[12][0-9]$|^3[01]$ ]] && PERIOD_START_DAY=1
-    while :; do read -p "流量限制 (GB): " TRAFFIC_LIMIT; [[ $TRAFFIC_LIMIT =~ ^[0-9]+(\.[0-9]*)?$ ]] && break; done
-    while :; do read -p "容错范围 (GB): " TRAFFIC_TOLERANCE; [[ $TRAFFIC_TOLERANCE =~ ^[0-9]+(\.[0-9]*)?$ ]] && break; done
+
+    while :; do
+        read -p "流量限制 (GB): " TRAFFIC_LIMIT
+        [[ $TRAFFIC_LIMIT =~ ^[0-9]+(\.[0-9]*)?$ ]] && break
+    done
+
+    while :; do
+        read -p "容错范围 (GB): " TRAFFIC_TOLERANCE
+        [[ $TRAFFIC_TOLERANCE =~ ^[0-9]+(\.[0-9]*)?$ ]] && break
+    done
+
     while :; do
         echo "1. TC限速  2. 关机"
         read -p "限制模式 (1-2): " m
         case $m in
-            1) LIMIT_MODE=tc; read -p "限速值 kbit/s (默认20): " LIMIT_SPEED; LIMIT_SPEED=${LIMIT_SPEED:-20}; break;;
-            2) LIMIT_MODE=shutdown; break;;
+            1)
+                LIMIT_MODE=tc
+                read -p "限速值 kbit/s (默认20): " LIMIT_SPEED
+                LIMIT_SPEED=${LIMIT_SPEED:-20}
+                break
+                ;;
+            2)
+                LIMIT_MODE=shutdown
+                break
+                ;;
         esac
     done
+
     write_config
 
- echo
+    echo
     echo "================ 流量基准设置 ================"
     echo "你可以在这里手动设定“本周期已使用流量（GB）”，"
     echo "用于同步运营商面板 / 实际使用情况。"
     echo "如果不确定，直接回车，默认从 0 开始统计。"
     echo "=============================================="
-    read -p "请输入当前本周期实际已使用流量(GB，默认0): " real_gb
+    read -r -p "请输入当前本周期实际已使用流量(GB，默认0): " real_gb
 
-    # 如果直接回车，就把 OFFSET_FILE 设为 0
+    # 回车默认 0：按你的原意直接写 0
     if [ -z "$real_gb" ]; then
-        echo 0 > "$OFFSET_FILE"
+        echo 0 > "$OFFSET_FILE" || { echo "写入 OFFSET_FILE 失败：$OFFSET_FILE"; return 1; }
         echo "$(date '+%Y-%m-%d %H:%M:%S') 首次初始化 OFFSET_FILE，设置为 0（本周期从 0GB 开始统计）" | tee -a "$LOG_FILE"
-        return
+        return 0
     fi
 
     # 校验输入是否为数字
     if ! [[ "$real_gb" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
         echo "输入格式不正确，已按 0GB 处理。"
-        echo 0 > "$OFFSET_FILE"
+        echo 0 > "$OFFSET_FILE" || { echo "写入 OFFSET_FILE 失败：$OFFSET_FILE"; return 1; }
         echo "$(date '+%Y-%m-%d %H:%M:%S') OFFSET_FILE 设置为 0（用户输入无效）" | tee -a "$LOG_FILE"
-        return
+        return 0
     fi
 
     # 读取当前 vnstat 累计字节数 raw_bytes
-    local line raw_bytes rx tx
+    local line raw_bytes rx tx real_bytes new_offset
     line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>&1 || echo "")
 
-    # vnstat 还没数据的情况
-    if echo "$line" | grep -qi "Not enough data available yet"; then
-        echo "vnstat 数据尚未准备好，无法根据当前累计流量反推 offset。"
-        echo "已暂时将 OFFSET_FILE 设置为 0，本周期从 $real_gb GB 逻辑上会不精确。"
-        echo 0 > "$OFFSET_FILE"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') vnstat 无数据，OFFSET_FILE 强制设为 0" | tee -a "$LOG_FILE"
-        return
+    # 情况 A：vnstat 还没数据 / 未更新 —— 按 raw_bytes=0 处理，也允许写负 offset
+    if echo "$line" | grep -qiE "Not enough data available yet|No data\. Timestamp of last update is same"; then
+        raw_bytes=0
+        real_bytes=$(echo "$real_gb * 1024 * 1024 * 1024" | bc | cut -d'.' -f1)
+        new_offset=$((raw_bytes - real_bytes))
+
+        echo "$new_offset" > "$OFFSET_FILE" || { echo "写入 OFFSET_FILE 失败：$OFFSET_FILE"; return 1; }
+
+        echo "--------------------------------------"
+        echo "vnstat 尚无历史数据，按 raw_bytes=0 处理"
+        echo "设定本周期使用量       : $real_gb GB"
+        echo "新的 offset            : $new_offset"
+        echo "（后续统计：已用 = 当前累计 - offset，将从 ${real_gb}GB 附近开始往上增长）"
+        echo "--------------------------------------"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') 初始化：vnstat 无历史数据，按 raw_bytes=0 处理，设置 OFFSET_FILE=$new_offset（对应本周期已用 $real_gb GB）" | tee -a "$LOG_FILE"
+        return 0
     fi
 
+    # 情况 B：vnstat 输出为空
     if [ -z "$line" ]; then
         echo "vnstat 输出为空，已将 OFFSET_FILE 设置为 0。"
-        echo 0 > "$OFFSET_FILE"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') vnstat 输出为空，OFFSET_FILE 强制设为 0" | tee -a "$LOG_FILE"
-        return
+        echo 0 > "$OFFSET_FILE" || { echo "写入 OFFSET_FILE 失败：$OFFSET_FILE"; return 1; }
+        echo "$(date '+%Y-%m-%d %H:%M:%S') 初始化：vnstat 输出为空，OFFSET_FILE 强制设为 0" | tee -a "$LOG_FILE"
+        return 0
     fi
 
+    # 情况 C：不是有效的 oneline 数据格式（必须含 ';'）
+    if ! echo "$line" | grep -q ';'; then
+        echo "vnstat 输出不是有效的 oneline 数据：$line"
+        echo 0 > "$OFFSET_FILE" || { echo "写入 OFFSET_FILE 失败：$OFFSET_FILE"; return 1; }
+        echo "$(date '+%Y-%m-%d %H:%M:%S') 初始化：vnstat oneline 非数据输出($line)，OFFSET_FILE 强制设为 0" | tee -a "$LOG_FILE"
+        return 0
+    fi
+
+    # 情况 D：vnstat 有正常数据，按模式取 raw_bytes
     raw_bytes=0
     case $TRAFFIC_MODE in
         out)
@@ -169,33 +218,40 @@ initial_config() {
                 raw_bytes="$tx"
             fi
             ;;
+        *)
+            raw_bytes=0
+            ;;
     esac
+
+    raw_bytes=${raw_bytes:-0}
 
     # 防止 raw_bytes 不是数字
     if ! [[ "$raw_bytes" =~ ^[0-9]+$ ]]; then
         echo "vnstat 返回的累计流量不是纯数字(raw_bytes=$raw_bytes)，OFFSET_FILE 将设为 0。"
-        echo 0 > "$OFFSET_FILE"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') raw_bytes 异常，OFFSET_FILE 强制设为 0" | tee -a "$LOG_FILE"
-        return
+        echo 0 > "$OFFSET_FILE" || { echo "写入 OFFSET_FILE 失败：$OFFSET_FILE"; return 1; }
+        echo "$(date '+%Y-%m-%d %H:%M:%S') 初始化：raw_bytes 异常($raw_bytes)，OFFSET_FILE 强制设为 0" | tee -a "$LOG_FILE"
+        return 0
     fi
 
-    # real_gb 转字节（用 1024^3，与 get_traffic_usage 保持一致）
-    local real_bytes new_offset
+    # real_gb 转字节（1024^3）
     real_bytes=$(echo "$real_gb * 1024 * 1024 * 1024" | bc | cut -d'.' -f1)
+
+    # 得到新的 offset（允许为负数）
     new_offset=$((raw_bytes - real_bytes))
-    # 注：这里刻意允许 new_offset 为负数，用于“新机器补历史用量”
-    # 例如 raw≈0.7GB、你填 60GB，则 offset≈-59GB，
-    # 后续 real = raw - offset = raw + 59GB，正好从 60GB 起算
-    echo "$new_offset" > "$OFFSET_FILE"
+
+    echo "$new_offset" > "$OFFSET_FILE" || { echo "写入 OFFSET_FILE 失败：$OFFSET_FILE"; return 1; }
 
     echo "--------------------------------------"
     echo "当前累计流量 raw_bytes : $raw_bytes bytes"
-    echo "你设定的本周期已用    : $real_gb GB"
-    echo "计算得到新的 offset   : $new_offset"
-    echo "已写入 $OFFSET_FILE"
+    echo "设定本周期使用量       : $real_gb GB"
+    echo "新的 offset            : $new_offset"
+    echo "（后续统计：已用 = 当前累计 - offset，将从 ${real_gb}GB 附近开始往上增长）"
     echo "--------------------------------------"
-    echo "$(date '+%Y-%m-%d %H:%M:%S') 首次配置时设置 OFFSET_FILE=$new_offset（对应本周期已用 $real_gb GB）" | tee -a "$LOG_FILE"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') 初始化：首次配置时设置 OFFSET_FILE=$new_offset（对应本周期已用 $real_gb GB）" | tee -a "$LOG_FILE"
+
+    return 0
 }
+
 
 # 获取当前周期起始日期
 get_period_start_date() {
