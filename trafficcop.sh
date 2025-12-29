@@ -7,6 +7,8 @@ LOG_FILE="$WORK_DIR/traffic.log"
 SCRIPT_PATH="$WORK_DIR/traffic.sh"
 LOCK_FILE="$WORK_DIR/traffic.lock"
 OFFSET_FILE="$WORK_DIR/traffic_offset.dat"   # 新增：周期流量偏移基准文件
+PERIOD_MARK_FILE="$WORK_DIR/period_mark.dat"
+
 # 设置时区为上海（东八区）
 export TZ='Asia/Shanghai'
 
@@ -224,14 +226,19 @@ get_period_start_date() {
 
 # 新周期开始时保存偏移基准并清除限制
 save_offset_on_new_period() {
-    local today=$(date +%Y-%m-%d)
-    local period_start=$(get_period_start_date)
-    if { [ "$today" = "$period_start" ] && [ "$(cat "$OFFSET_FILE" 2>/dev/null || echo 0)" != "0" ]; } || [ ! -f "$OFFSET_FILE" ]; then
+    local today period_start last_mark
+    today=$(date +%Y-%m-%d)
+    period_start=$(get_period_start_date)
+    last_mark=$(cat "$PERIOD_MARK_FILE" 2>/dev/null || echo "")
+
+    # 只要 period_start 变化，就认为进入新周期（只执行一次）
+    if [ "$last_mark" != "$period_start" ]; then
         local total_bytes=0
-        local line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>&1 || echo "")
+        local line
+        line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>&1 || echo "")
 
         if echo "$line" | grep -qi "Not enough data available yet"; then
-            echo "$(date '+%Y-%m-%d %H:%M:%S') 新周期开始但 vnstat 数据尚未就绪，暂不更新偏移基准" | tee -a "$LOG_FILE"
+            echo "$(date '+%Y-%m-%d %H:%M:%S') 新周期检测到但 vnstat 数据尚未就绪，稍后再试（不会写入mark）" | tee -a "$LOG_FILE"
             return
         fi
 
@@ -240,8 +247,9 @@ save_offset_on_new_period() {
             in)    total_bytes=$(echo "$line" | cut -d';' -f9) ;;
             total) total_bytes=$(echo "$line" | cut -d';' -f11) ;;
             max)
-                local rx=$(echo "$line" | cut -d';' -f9)
-                local tx=$(echo "$line" | cut -d';' -f10)
+                local rx tx
+                rx=$(echo "$line" | cut -d';' -f9)
+                tx=$(echo "$line" | cut -d';' -f10)
                 rx=${rx:-0}; tx=${tx:-0}
                 [[ "$rx" =~ ^[0-9]+$ ]] || rx=0
                 [[ "$tx" =~ ^[0-9]+$ ]] || tx=0
@@ -249,14 +257,15 @@ save_offset_on_new_period() {
                 ;;
         esac
 
-        # 不是纯数字就放弃更新
         if ! [[ "$total_bytes" =~ ^[0-9]+$ ]]; then
-            echo "$(date '+%Y-%m-%d %H:%M:%S') 新周期基准异常(total_bytes=$total_bytes)，暂不更新 OFFSET" | tee -a "$LOG_FILE"
+            echo "$(date '+%Y-%m-%d %H:%M:%S') 新周期基准异常(total_bytes=$total_bytes)，稍后再试（不会写入mark）" | tee -a "$LOG_FILE"
             return
         fi
 
         echo "$total_bytes" > "$OFFSET_FILE"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') 新周期开始，流量统计已重置为0（基准已更新）" | tee -a "$LOG_FILE"
+        echo "$period_start" > "$PERIOD_MARK_FILE"
+
+        echo "$(date '+%Y-%m-%d %H:%M:%S') 进入新周期：period_start=$period_start，已更新基准并清除限速/关机" | tee -a "$LOG_FILE"
         tc qdisc del dev "$MAIN_INTERFACE" root 2>/dev/null
         shutdown -c 2>/dev/null
     fi
