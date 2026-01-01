@@ -504,12 +504,11 @@ show_main_menu() {
     echo -e "${YELLOW}2) 安装/管理Telegram通知${NC}"
     echo -e "${YELLOW}3) 安装/管理PushPlus通知${NC}"
     echo -e "${YELLOW}4) 安装/管理node监控${NC}"  
-    echo -e "${YELLOW}5) 查看日志${NC}"
-    echo -e "${YELLOW}6) 查看配置${NC}"
-    echo -e "${YELLOW}7) 查看已用流量${NC}" 
-    echo -e "${YELLOW}8) 设置已用流量${NC}" 
-    echo -e "${RED}9) 停止所有服务${NC}"
-    echo -e "${BLUE}10) 更新所有脚本${NC}"
+    echo -e "${YELLOW}5) 查看配置${NC}"
+    echo -e "${YELLOW}6) 实时流量${NC}" 
+    echo -e "${YELLOW}7) 补偿流量${NC}" 
+    echo -e "${RED}8) 停止服务${NC}"
+    echo -e "${BLUE}9) 更新脚本${NC}"
     echo -e "${YELLOW}0) 退出${NC}"
     echo -e "${PURPLE}====================================${NC}"
     echo ""
@@ -536,24 +535,20 @@ main() {
                 ;;
             4)
                 install_node
-                ;;             
-        
+                ;;                  
             5)
-                view_logs
-                ;;
-            6)
                 view_config
                 ;;
-            7)
+            6)
                 Traffic_all
                 ;;    
-            8)
+            7)
                 flow_setting
                 ;;              
-            9)
+            8)
                 stop_all_services
                 ;;
-            10)
+            9)
                 update_all_scripts
                 ;;
 
