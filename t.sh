@@ -344,9 +344,10 @@ Traffic_all() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') DEBUG: raw_bytes(all-time)=$raw_bytes offset=$offset real_bytes=$real_bytes iface=$MAIN_INTERFACE"
 }
 
-
 # ======================================================
-# 手动设置已用流量（管理脚本版本）
+# 手动设置已用流量（管理脚本版本，口径与 trafficcop.sh 一致）
+# - 使用 vnstat all-time 字段：in=13 out=14 total=15
+# - offset = raw_all_time_bytes - target_bytes
 # ======================================================
 flow_setting() {
     echo "================ 手动修正本周期流量 ================"
@@ -363,119 +364,105 @@ flow_setting() {
         return 1
     fi
 
-    # 这些路径在“管理脚本”里自己定义，不再依赖 trafficcop.sh 的变量
     local config_file="$WORK_DIR/traffic_config.txt"
     local offset_file="$WORK_DIR/traffic_offset.dat"
     local log_file="$WORK_DIR/traffic.log"
 
-    # 尝试从配置文件加载 MAIN_INTERFACE / TRAFFIC_MODE
-    if { [ -z "$MAIN_INTERFACE" ] || [ -z "$TRAFFIC_MODE" ]; } && [ -f "$config_file" ]; then
-        # shellcheck disable=SC1090
-        source "$config_file"
+    if [ ! -f "$config_file" ]; then
+        echo "错误：找不到配置文件 $config_file，请先在菜单[1]完成流量监控安装/配置。"
+        return 1
     fi
+
+    # 只解析 KEY=VALUE，避免中文/空格/杂项导致 source 失败
+    # shellcheck disable=SC1090
+    source <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$config_file" | sed 's/\r$//') 2>/dev/null || {
+        echo "错误：配置加载失败（可能包含非法行）：$config_file"
+        return 1
+    }
+
+    TRAFFIC_MODE=${TRAFFIC_MODE:-total}
+    MAIN_INTERFACE=${MAIN_INTERFACE:-eth0}
 
     if [ -z "$MAIN_INTERFACE" ] || [ -z "$TRAFFIC_MODE" ]; then
-        echo "错误：未能获取 MAIN_INTERFACE / TRAFFIC_MODE，请先在菜单[1]完成流量监控安装/配置。"
+        echo "错误：未能获取 MAIN_INTERFACE / TRAFFIC_MODE，请先在菜单[1]完成配置。"
         return 1
     fi
 
-    local line raw_bytes rx tx real_bytes new_offset
+    # 强制刷新 vnstat 数据库，避免读到旧值
+    vnstat -u -i "$MAIN_INTERFACE" >/dev/null 2>&1
+
+    local line raw_bytes rx tx target_bytes new_offset
     line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>&1 || echo "")
 
-    # 情况 A：vnstat 还没数据 -> 视为 VPS 首次创建，当前累计流量按 0 处理
+    # vnstat 没数据/未就绪：raw_bytes 按 0 处理（允许写负 offset）
     if echo "$line" | grep -qiE "Not enough data available yet|No data\. Timestamp of last update is same"; then
-        echo "检测到 vnstat 尚无历史数据，视为首次创建 VPS。"
-        echo "将当前累计流量按 0 bytes 处理，根据你输入的 ${real_gb} GB 写入补偿值（可能为负数）。"
-
         raw_bytes=0
+    else
+        # 其它异常：必须是包含 ';' 的 oneline 数据
+        if [ -z "$line" ] || ! echo "$line" | grep -q ';'; then
+            echo "vnstat 输出无效，无法计算 raw_bytes：$line"
+            echo "$(date '+%Y-%m-%d %H:%M:%S') flow_setting：vnstat 输出无效($line)，放弃修改 OFFSET_FILE" | tee -a "$log_file"
+            return 1
+        fi
 
-        # real_gb 转换为字节（1024^3）
-        real_bytes=$(echo "$real_gb * 1024 * 1024 * 1024" | bc | cut -d'.' -f1)
-
-        # 初始累计为 0，则 offset = 0 - real_bytes（允许为负数）
-        new_offset=$((raw_bytes - real_bytes))
-
-        echo "$new_offset" > "$offset_file"
-
-        echo "--------------------------------------"
-        echo "当前累计流量 raw_bytes : $raw_bytes bytes (按 0 处理)"
-        echo "设定本周期使用量       : $real_gb GB"
-        echo "新的 offset            : $new_offset"
-        echo "（后续统计：已用 = 当前累计 - offset，将从 ${real_gb}GB 附近开始往上增长）"
-        echo "--------------------------------------"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') flow_setting：vnstat 无历史数据，按 raw_bytes=0 处理，设置 OFFSET_FILE=$new_offset（对应本周期已用 $real_gb GB）" | tee -a "$log_file"
-        return 0
+        # ✅ 关键：使用 all-time 字段（与 trafficcop.sh 一致）
+        raw_bytes=0
+        case "$TRAFFIC_MODE" in
+            out)
+                raw_bytes=$(echo "$line" | cut -d';' -f14)   # all-time tx
+                ;;
+            in)
+                raw_bytes=$(echo "$line" | cut -d';' -f13)   # all-time rx
+                ;;
+            total)
+                raw_bytes=$(echo "$line" | cut -d';' -f15)   # all-time total
+                ;;
+            max)
+                rx=$(echo "$line" | cut -d';' -f13)
+                tx=$(echo "$line" | cut -d';' -f14)
+                rx=${rx:-0}; tx=${tx:-0}
+                [[ "$rx" =~ ^[0-9]+$ ]] || rx=0
+                [[ "$tx" =~ ^[0-9]+$ ]] || tx=0
+                raw_bytes=$((rx > tx ? rx : tx))
+                ;;
+            *)
+                raw_bytes=$(echo "$line" | cut -d';' -f15)
+                ;;
+        esac
     fi
-
-    # 情况 B：其它异常
-    if [ -z "$line" ]; then
-        echo "vnstat 输出为空，无法计算 raw_bytes。"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') flow_setting：vnstat 输出为空，放弃修改 OFFSET_FILE" | tee -a "$log_file"
-        return 1
-    fi
-
-    # 如果没有 ';'，说明不是正常的 --oneline b 数据格式
-    if ! echo "$line" | grep -q ';'; then
-        echo "vnstat 输出不是有效的 oneline 数据：$line"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') flow_setting：vnstat oneline 非数据输出($line)，放弃修改 OFFSET_FILE" | tee -a "$log_file"
-        return 1
-    fi
-
-    # 情况 C：vnstat 有正常数据，按模式取 raw_bytes
-    raw_bytes=0
-    case $TRAFFIC_MODE in
-        out)
-            raw_bytes=$(echo "$line" | cut -d';' -f10)
-            ;;
-        in)
-            raw_bytes=$(echo "$line" | cut -d';' -f9)
-            ;;
-        total)
-            raw_bytes=$(echo "$line" | cut -d';' -f11)
-            ;;
-        max)
-            rx=$(echo "$line" | cut -d';' -f9)
-            tx=$(echo "$line" | cut -d';' -f10)
-            rx=${rx:-0}
-            tx=${tx:-0}
-            [[ "$rx" =~ ^[0-9]+$ ]] || rx=0
-            [[ "$tx" =~ ^[0-9]+$ ]] || tx=0
-            if [ "$rx" -gt "$tx" ] 2>/dev/null; then
-                raw_bytes="$rx"
-            else
-                raw_bytes="$tx"
-            fi
-            ;;
-        *)
-            raw_bytes=0
-            ;;
-    esac
 
     raw_bytes=${raw_bytes:-0}
-
-    # 防止 raw_bytes 不是数字
     if ! [[ "$raw_bytes" =~ ^[0-9]+$ ]]; then
-        echo "vnstat 返回的累计流量不是纯数字(raw_bytes=$raw_bytes)，无法安全计算 offset。"
+        echo "vnstat 返回的累计流量不是纯数字(raw_bytes=$raw_bytes)，放弃修改。"
         echo "$(date '+%Y-%m-%d %H:%M:%S') flow_setting：raw_bytes 异常($raw_bytes)，放弃修改 OFFSET_FILE" | tee -a "$log_file"
         return 1
     fi
 
-    # real_gb 转换为字节（1024^3）
-    real_bytes=$(echo "$real_gb * 1024 * 1024 * 1024" | bc | cut -d'.' -f1)
+    # real_gb -> bytes（1024^3）
+    target_bytes=$(echo "$real_gb * 1024 * 1024 * 1024" | bc 2>/dev/null | cut -d'.' -f1)
+    target_bytes=${target_bytes:-0}
+    [[ "$target_bytes" =~ ^[0-9]+$ ]] || target_bytes=0
 
-    # 得到新的 offset（允许为负数，用于补历史用量）
-    new_offset=$((raw_bytes - real_bytes))
+    # offset = 当前 all-time 累计 - 目标本周期用量
+    # 后续显示：已用 = 当前 all-time - offset ≈ real_gb
+    new_offset=$((raw_bytes - target_bytes))
 
     echo "$new_offset" > "$offset_file"
 
     echo "--------------------------------------"
-    echo "当前累计流量 raw_bytes : $raw_bytes bytes"
-    echo "设定本周期使用量       : $real_gb GB"
-    echo "新的 offset            : $new_offset"
+    echo "当前累计流量 raw_bytes(all-time): $raw_bytes bytes"
+    echo "设定本周期使用量            : $real_gb GB"
+    echo "目标字节 target_bytes        : $target_bytes bytes"
+    echo "新的 offset                 : $new_offset"
     echo "（后续统计：已用 = 当前累计 - offset，将从 ${real_gb}GB 附近开始往上增长）"
     echo "--------------------------------------"
     echo "$(date '+%Y-%m-%d %H:%M:%S') flow_setting：手动设置 OFFSET_FILE=$new_offset（对应本周期已用 $real_gb GB）" | tee -a "$log_file"
+
+    return 0
 }
+
+
+
 # ======================================================
 # 安装 / 管理 node 监控通知
 # ======================================================
