@@ -231,13 +231,13 @@ update_all_scripts() {
     read -p "按回车键继续..."
 }
 
-# 读取当前总流量（不再 source trafficcop.sh，直接读配置+vnstat）
 # ============================================
 # 读取当前总流量（与 trafficcop.sh 口径一致：all-time 字段 13/14/15）
 # - 读取 traffic_config.txt（仅解析 KEY=VALUE）
 # - 读取 traffic_offset.dat
 # - vnstat --oneline b 使用 all-time：
 #   in=13 out=14 total=15
+# - 输出统一格式：printf "%.3f"
 # ============================================
 Traffic_all() {
     local config_file="$WORK_DIR/traffic_config.txt"
@@ -278,7 +278,7 @@ Traffic_all() {
         echo "$(date '+%Y-%m-%d %H:%M:%S') vnstat 输出无效（接口：$MAIN_INTERFACE），暂按 0GB 处理。"
         raw_bytes=0
     else
-        # ✅ 关键修正：使用 all-time 字段 13/14/15（与 trafficcop.sh 一致）
+        # ✅ 使用 all-time 字段 13/14/15（与 trafficcop.sh 一致）
         case "$TRAFFIC_MODE" in
             out)
                 raw_bytes=$(echo "$line" | cut -d';' -f14)
@@ -308,12 +308,12 @@ Traffic_all() {
     local real_bytes=$((raw_bytes - offset))
     [ "$real_bytes" -lt 0 ] && real_bytes=0
 
+    # ✅ 统一格式：始终输出 3 位小数（0.000 / 12.340 / 123.456）
     local usage_gb
-    usage_gb=$(echo "scale=3; $real_bytes/1024/1024/1024" | bc 2>/dev/null)
-    usage_gb=${usage_gb:-0}
+    usage_gb=$(echo "$real_bytes/1024/1024/1024" | bc -l 2>/dev/null)
+    usage_gb=$(printf "%.3f" "${usage_gb:-0}")
 
-    # 周期起始日期（建议与你的 trafficcop.sh 的新版 get_period_start_date 一致；
-    # 这里保留你原来的简化逻辑，若你想完全一致我也可以给你一份“同款函数”）
+    # 周期起始日期（简化版）
     local y m d period_start
     y=$(date +%Y)
     m=$(date +%m)
