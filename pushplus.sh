@@ -1,11 +1,12 @@
 #!/bin/bash
 # ============================================
 # PushPlus 通知脚本 for TrafficCop
-# 适配：trafficcop.sh v1.0.85
+# ✅已适配：TrafficCop 使用 all-time(13/14/15) + offset 的口径
 # 文件路径建议：/root/TrafficCop/pushplus.sh
 # ============================================
 
 export TZ='Asia/Shanghai'
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # ----------------- 基本路径 -------------------
 WORK_DIR="/root/TrafficCop"
@@ -51,10 +52,10 @@ log_cron() {
     trim_cron_log
 }
 
-# 这两行原来就在最顶部写日志，但会绕过裁剪；现在补一刀 trim
+# 启动日志（并自动裁剪）
 echo "----------------------------------------------" | tee -a "$CRON_LOG" >/dev/null
 trim_cron_log
-log_cron "启动 PushPlus 通知脚本 (TrafficCop 版)"
+log_cron "启动 PushPlus 通知脚本 (TrafficCop 版, all-time aligned)"
 
 # ============================================
 # 防止重复运行
@@ -75,7 +76,7 @@ read_config() {
         return 1
     fi
     # shellcheck disable=SC1090
-    source "$CONFIG_FILE"
+    source "$CONFIG_FILE" 2>/dev/null
     if [ -z "$PUSHPLUS_TOKEN" ] || [ -z "$MACHINE_NAME" ] || [ -z "$DAILY_REPORT_TIME" ] || [ -z "$EXPIRE_DATE" ]; then
         log_cron "PushPlus 配置不完整。"
         return 1
@@ -94,20 +95,42 @@ EOF
 }
 
 # ============================================
-# 读取 TrafficCop 配置
+# 读取 TrafficCop 配置（更鲁棒：只读 KEY=VALUE 行）
 # ============================================
 read_traffic_config() {
     if [ ! -s "$TRAFFIC_CONFIG" ]; then
         log_cron "❌ 找不到 TrafficCop 配置文件: $TRAFFIC_CONFIG"
         return 1
     fi
+
+    # 清理旧值，避免残留污染
+    unset MAIN_INTERFACE TRAFFIC_MODE TRAFFIC_LIMIT TRAFFIC_TOLERANCE TRAFFIC_PERIOD PERIOD_START_DAY LIMIT_MODE LIMIT_SPEED
+
     # shellcheck disable=SC1090
-    source "$TRAFFIC_CONFIG"
-    # 关键变量简单校验
+    source <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$TRAFFIC_CONFIG" | sed 's/\r$//') 2>/dev/null || {
+        log_cron "❌ TrafficCop 配置加载失败（可能包含非法行）: $TRAFFIC_CONFIG"
+        return 1
+    }
+
+    # 兜底
+    TRAFFIC_MODE=${TRAFFIC_MODE:-total}
+    TRAFFIC_PERIOD=${TRAFFIC_PERIOD:-monthly}
+    PERIOD_START_DAY=${PERIOD_START_DAY:-1}
+    TRAFFIC_LIMIT=${TRAFFIC_LIMIT:-0}
+    TRAFFIC_TOLERANCE=${TRAFFIC_TOLERANCE:-0}
+
+    # 关键变量校验
     if [ -z "$MAIN_INTERFACE" ] || [ -z "$TRAFFIC_MODE" ] || [ -z "$TRAFFIC_LIMIT" ] || [ -z "$TRAFFIC_TOLERANCE" ]; then
         log_cron "❌ TrafficCop 配置不完整。"
         return 1
     fi
+
+    # 接口校验
+    if ! ip link show "$MAIN_INTERFACE" >/dev/null 2>&1; then
+        log_cron "❌ 主接口无效/不存在：$MAIN_INTERFACE"
+        return 1
+    fi
+
     return 0
 }
 
@@ -133,65 +156,78 @@ get_period_start_date() {
             local qm=$(( ((10#$m - 1)/3*3 + 1) ))
             qm=$(printf "%02d" "$qm")
             if [ "$d" -lt "$PERIOD_START_DAY" ]; then
-                date -d "$y-$qm-$PERIOD_START_DAY -3 months" +%Y-%m-%d
+                date -d "$y-$qm-$PERIOD_START_DAY -3 months" +%Y-%m-%d 2>/dev/null
             else
-                date -d "$y-$qm-$PERIOD_START_DAY" +%Y-%m-%d
+                date -d "$y-$qm-$PERIOD_START_DAY" +%Y-%m-%d 2>/dev/null
             fi
             ;;
         yearly)
-            # 这里沿用你原来的逻辑（按起始日所在的年份/上一年计算）
             if [ "$d" -lt "$PERIOD_START_DAY" ]; then
-                date -d "$((y-1))-01-$PERIOD_START_DAY" +%Y-%m-%d
+                date -d "$((y-1))-01-$PERIOD_START_DAY" +%Y-%m-%d 2>/dev/null
             else
-                date -d "$y-01-$PERIOD_START_DAY" +%Y-%m-%d
+                date -d "$y-01-$PERIOD_START_DAY" +%Y-%m-%d 2>/dev/null
             fi
             ;;
         *)
-            # 默认按月
-            date -d "$y-$m-${PERIOD_START_DAY:-1}" +%Y-%m-%d
+            date -d "$y-$m-${PERIOD_START_DAY:-1}" +%Y-%m-%d 2>/dev/null
             ;;
     esac
 }
 
+get_period_end_date() {
+    local start="$1"
+    local end=""
+
+    case "$TRAFFIC_PERIOD" in
+        monthly)   end=$(date -d "${start} +1 month -1 day" +%Y-%m-%d 2>/dev/null) ;;
+        quarterly) end=$(date -d "${start} +3 month -1 day" +%Y-%m-%d 2>/dev/null) ;;
+        yearly)    end=$(date -d "${start} +1 year -1 day" +%Y-%m-%d 2>/dev/null) ;;
+        *)         end=$(date -d "${start} +1 month -1 day" +%Y-%m-%d 2>/dev/null) ;;
+    esac
+
+    [ -z "$end" ] && end=$(date +%Y-%m-%d)
+    echo "$end"
+}
+
+# ==================== 流量读取（vnstat all-time + offset） ====================
 get_traffic_usage() {
-    local offset raw_bytes real_bytes line
+    local offset raw_bytes real_bytes line rx tx
 
     offset=$(cat "$OFFSET_FILE" 2>/dev/null || echo 0)
+    [[ "$offset" =~ ^-?[0-9]+$ ]] || offset=0
+
+    # 强制更新 vnstat 数据库，避免读取旧值
+    vnstat -u -i "$MAIN_INTERFACE" >/dev/null 2>&1
+
     line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>/dev/null || echo "")
+    if [ -z "$line" ] || ! echo "$line" | grep -q ';'; then
+        printf "0.000"
+        return 0
+    fi
 
     raw_bytes=0
+    # 使用 all-time 字段：in=13 out=14 total=15
     case $TRAFFIC_MODE in
-        out)
-            raw_bytes=$(echo "$line" | cut -d';' -f10)
-            ;;
-        in)
-            raw_bytes=$(echo "$line" | cut -d';' -f9)
-            ;;
-        total)
-            raw_bytes=$(echo "$line" | cut -d';' -f11)
-            ;;
+        out)   raw_bytes=$(echo "$line" | cut -d';' -f14) ;;
+        in)    raw_bytes=$(echo "$line" | cut -d';' -f13) ;;
+        total) raw_bytes=$(echo "$line" | cut -d';' -f15) ;;
         max)
-            local rx tx
-            rx=$(echo "$line" | cut -d';' -f9)
-            tx=$(echo "$line" | cut -d';' -f10)
-            rx=${rx:-0}
-            tx=${tx:-0}
-            if [ "$rx" -gt "$tx" ] 2>/dev/null; then
-                raw_bytes="$rx"
-            else
-                raw_bytes="$tx"
-            fi
+            rx=$(echo "$line" | cut -d';' -f13)
+            tx=$(echo "$line" | cut -d';' -f14)
+            rx=${rx:-0}; tx=${tx:-0}
+            [[ "$rx" =~ ^[0-9]+$ ]] || rx=0
+            [[ "$tx" =~ ^[0-9]+$ ]] || tx=0
+            raw_bytes=$((rx > tx ? rx : tx))
             ;;
-        *)
-            raw_bytes=0
-            ;;
+        *) raw_bytes=0 ;;
     esac
 
     raw_bytes=${raw_bytes:-0}
+    [[ "$raw_bytes" =~ ^[0-9]+$ ]] || raw_bytes=0
+
     real_bytes=$((raw_bytes - offset))
     [ "$real_bytes" -lt 0 ] && real_bytes=0
 
-    # 输出 GB，保留 3 位小数
     printf "%.3f" "$(echo "scale=6; $real_bytes/1024/1024/1024" | bc 2>/dev/null || echo 0)"
 }
 
@@ -318,35 +354,6 @@ initial_config() {
     echo
 }
 
-# 计算周期
-get_period_end_date() {
-    local start="$1"
-    local end=""
-
-    case "$TRAFFIC_PERIOD" in
-        monthly)
-            end=$(date -d "${start} +1 month -1 day" +%Y-%m-%d 2>/dev/null)
-            ;;
-        quarterly)
-            end=$(date -d "${start} +3 month -1 day" +%Y-%m-%d 2>/dev/null)
-            ;;
-        yearly)
-            end=$(date -d "${start} +1 year -1 day" +%Y-%m-%d 2>/dev/null)
-            ;;
-        *)
-            # 默认当月周期
-            end=$(date -d "${start} +1 month -1 day" +%Y-%m-%d 2>/dev/null)
-            ;;
-    esac
-
-    # 兜底：如果上面计算失败，就用今天
-    if [ -z "$end" ]; then
-        end=$(date +%Y-%m-%d)
-    fi
-
-    echo "$end"
-}
-
 # ============================================
 # 每日报告（增加 💾空间 行）
 # ============================================
@@ -360,10 +367,8 @@ daily_report() {
     local today expire_formatted expire_ts today_ts diff_days diff_emoji
     local disk_used disk_total disk_pct disk_line
 
-    # 本期已用流量（已经减去 offset）
     current_usage=$(get_traffic_usage 2>/dev/null || echo "0.000")
 
-    # 周期开始 / 结束
     period_start=$(get_period_start_date 2>/dev/null || echo "未知")
     if [ "$period_start" != "未知" ]; then
         period_end=$(get_period_end_date "$period_start")
@@ -379,7 +384,6 @@ daily_report() {
         limit="未知"
     fi
 
-    # VPS 剩余天数（只显示「xxx天」）
     today=$(date '+%Y-%m-%d')
     expire_formatted=$(echo "$EXPIRE_DATE" | tr '.' '-')
     expire_ts=$(date -d "${expire_formatted} 00:00:00" +%s 2>/dev/null)
@@ -406,7 +410,6 @@ daily_report() {
         fi
     fi
 
-    # ===== 💾 硬盘使用情况（根分区 /）：只生成 “已用/总量 (百分比)” =====
     disk_used=$(df -hP / 2>/dev/null | awk 'NR==2{print $3}')
     disk_total=$(df -hP / 2>/dev/null | awk 'NR==2{print $2}')
     disk_pct=$(df -hP / 2>/dev/null | awk 'NR==2{print $5}')
@@ -460,7 +463,7 @@ get_current_traffic() {
     echo "流量限制     : $TRAFFIC_LIMIT GB"
     echo "容错范围     : $TRAFFIC_TOLERANCE GB"
     echo "阈值         : $(echo "$TRAFFIC_LIMIT - $TRAFFIC_TOLERANCE" | bc 2>/dev/null || echo "未知") GB"
-    echo "限制方式     : $LIMIT_MODE"
+    echo "限制方式     : ${LIMIT_MODE:-未知}"
     echo "======================================="
 }
 
@@ -497,24 +500,22 @@ main() {
     check_running
 
     if [[ "$*" == *"-cron"* ]]; then
-        # Cron 模式：每分钟跑一次，只在指定时间发日报
         if ! read_config; then
             log_cron "PushPlus 配置不完整，跳过 cron 执行。"
             exit 1
         fi
+
         local current_time
         current_time=$(date +%H:%M)
         log_cron "cron 模式，当前时间: $current_time，设定报告时间: $DAILY_REPORT_TIME"
 
         if [ "$current_time" = "$DAILY_REPORT_TIME" ]; then
-            # 每天第一次命中时可以考虑清空日志
             echo "$(date '+%Y-%m-%d %H:%M:%S') : 时间匹配，开始发送每日报告。" >"$CRON_LOG"
             daily_report
         else
             log_cron "时间未到每日报告点，不发送。"
         fi
     else
-        # 交互菜单模式
         if ! read_config; then
             log_cron "未检测到完整配置，将进行初始化。"
             initial_config
