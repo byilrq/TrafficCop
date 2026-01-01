@@ -7,7 +7,7 @@ LOG_FILE="$WORK_DIR/traffic.log"
 SCRIPT_PATH="$WORK_DIR/traffic.sh"
 LOCK_FILE="$WORK_DIR/traffic.lock"
 OFFSET_FILE="$WORK_DIR/traffic_offset.dat"   # 新增：周期流量偏移基准文件
-PERIOD_MARK_FILE="$WORK_DIR/period_mark.dat"
+PERIOD_MARK_FILE="$WORK_DIR/traffic_period.dat"
 
 # 设置时区为上海（东八区）
 export TZ='Asia/Shanghai'
