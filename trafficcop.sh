@@ -187,6 +187,11 @@ get_main_interface() {
 # ============================================
 # 初始配置（交互）
 # ============================================
+# ============================================
+# 初始配置（交互）
+# - 支持手动输入“本周期已用 GB”
+# - 写入 OFFSET_FILE 后同步写入 LAST_PERIOD_RESET，避免新周期检测覆盖 offset
+# ============================================
 initial_config() {
     MAIN_INTERFACE=$(get_main_interface)
 
@@ -239,9 +244,14 @@ initial_config() {
         esac
     done
 
-    # 新增字段：LAST_PERIOD_RESET（初始化先留空，后面 save_offset_on_new_period 会写入）
-    LAST_PERIOD_RESET=${LAST_PERIOD_RESET:-}
+    # ====== 关键：本次配置属于哪个周期（先算出来）======
+    local period_start
+    period_start=$(get_period_start_date)
 
+    # 新增字段：LAST_PERIOD_RESET（先写入当前周期起点，避免后续 save_offset_on_new_period 覆盖）
+    LAST_PERIOD_RESET="$period_start"
+
+    # 先把配置写入（包括 LAST_PERIOD_RESET）
     write_config
 
     echo
@@ -252,20 +262,24 @@ initial_config() {
     echo "=============================================="
     read -r -p "请输入当前本周期实际已使用流量(GB，默认0): " real_gb
 
+    # 回车默认 0
     if [ -z "$real_gb" ]; then
         echo 0 > "$OFFSET_FILE" || { echo "写入 OFFSET_FILE 失败：$OFFSET_FILE"; return 1; }
-        log_info "首次初始化 OFFSET_FILE=0（本周期从 0GB 开始统计）"
+        log_info "初始化：OFFSET_FILE=0（本周期从 0GB 开始统计）"
         return 0
     fi
 
+    # 校验输入
     if ! [[ "$real_gb" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
         echo "输入格式不正确，已按 0GB 处理。"
         echo 0 > "$OFFSET_FILE" || { echo "写入 OFFSET_FILE 失败：$OFFSET_FILE"; return 1; }
-        log_info "OFFSET_FILE=0（用户输入无效）"
+        log_info "初始化：OFFSET_FILE=0（用户输入无效）"
         return 0
     fi
 
+    # 更新 vnstat DB
     vnstat -u -i "$MAIN_INTERFACE" >/dev/null 2>&1
+
     local line raw_bytes rx tx real_bytes new_offset
     line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>/dev/null || echo "")
 
@@ -283,7 +297,8 @@ initial_config() {
         in)    raw_bytes=$(echo "$line" | cut -d';' -f13) ;;
         total) raw_bytes=$(echo "$line" | cut -d';' -f15) ;;
         max)
-            rx=$(echo "$line" | cut -d';' -f13); tx=$(echo "$line" | cut -d';' -f14)
+            rx=$(echo "$line" | cut -d';' -f13)
+            tx=$(echo "$line" | cut -d';' -f14)
             rx=${rx:-0}; tx=${tx:-0}
             [[ "$rx" =~ ^[0-9]+$ ]] || rx=0
             [[ "$tx" =~ ^[0-9]+$ ]] || tx=0
@@ -296,12 +311,18 @@ initial_config() {
     [[ "$raw_bytes" =~ ^[0-9]+$ ]] || raw_bytes=0
 
     real_bytes=$(echo "$real_gb * 1024 * 1024 * 1024" | bc | cut -d'.' -f1)
+    real_bytes=${real_bytes:-0}
+    [[ "$real_bytes" =~ ^[0-9]+$ ]] || real_bytes=0
+
     new_offset=$((raw_bytes - real_bytes))
 
     echo "$new_offset" > "$OFFSET_FILE" || { echo "写入 OFFSET_FILE 失败：$OFFSET_FILE"; return 1; }
+
     log_info "初始化：OFFSET_FILE=$new_offset（对应本周期已用 $real_gb GB）"
+    log_info "初始化：LAST_PERIOD_RESET=$period_start（防止新周期检测覆盖 offset）"
     return 0
 }
+
 
 # ============================================
 # 计算当前周期起始日（monthly/quarterly/yearly）
