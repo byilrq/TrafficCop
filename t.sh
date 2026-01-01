@@ -521,7 +521,7 @@ main() {
     
     while true; do
         show_main_menu
-        read -p "请选择操作 [0-11]: " choice
+        read -p "请选择操作 [0-9]: " choice
         
         case $choice in
             1)
