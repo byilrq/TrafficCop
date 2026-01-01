@@ -50,7 +50,39 @@ check_and_install_packages() {
 }
 
 # 读写配置
-read_config() { [ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE" && return 0 || return 1; }
+# 读配置（更鲁棒：只解析 KEY=VALUE 行，避免 source 因为中文/杂项失败）
+read_config() {
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') 配置文件不存在：$CONFIG_FILE" | tee -a "$LOG_FILE"
+        return 1
+    fi
+
+    # 只取形如 AAA=BBB 的行，忽略其它任何内容（包括中文说明/空格/日志）
+    # shellcheck disable=SC1090
+    source <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$CONFIG_FILE" | sed 's/\r$//') 2>/dev/null || {
+        echo "$(date '+%Y-%m-%d %H:%M:%S') 配置加载失败（可能包含非法行）：$CONFIG_FILE" | tee -a "$LOG_FILE"
+        return 1
+    }
+
+    # 兜底默认值，防止缺字段导致后续为空
+    TRAFFIC_MODE=${TRAFFIC_MODE:-total}
+    TRAFFIC_PERIOD=${TRAFFIC_PERIOD:-monthly}
+    TRAFFIC_LIMIT=${TRAFFIC_LIMIT:-0}
+    TRAFFIC_TOLERANCE=${TRAFFIC_TOLERANCE:-0}
+    PERIOD_START_DAY=${PERIOD_START_DAY:-1}
+    LIMIT_SPEED=${LIMIT_SPEED:-20}
+    LIMIT_MODE=${LIMIT_MODE:-tc}
+
+    # 主接口兜底：配置没写就自动探测
+    if [ -z "$MAIN_INTERFACE" ]; then
+        MAIN_INTERFACE=$(ip route | awk '/default/ {print $5; exit}')
+        [ -z "$MAIN_INTERFACE" ] && MAIN_INTERFACE=$(ip link | awk -F': ' '/state UP/ {print $2; exit}')
+    fi
+
+    echo "$(date '+%Y-%m-%d %H:%M:%S') 已加载配置：MODE=$TRAFFIC_MODE PERIOD=$TRAFFIC_PERIOD IFACE=$MAIN_INTERFACE LIMIT=$TRAFFIC_LIMIT TOL=$TRAFFIC_TOLERANCE LIMIT_MODE=$LIMIT_MODE" | tee -a "$LOG_FILE"
+    return 0
+}
+
 write_config() {
     cat > "$CONFIG_FILE" << EOF
 TRAFFIC_MODE=$TRAFFIC_MODE
@@ -197,17 +229,17 @@ initial_config() {
     raw_bytes=0
     case $TRAFFIC_MODE in
         out)
-            raw_bytes=$(echo "$line" | cut -d';' -f10)
+            raw_bytes=$(echo "$line" | cut -d';' -f14)
             ;;
         in)
-            raw_bytes=$(echo "$line" | cut -d';' -f9)
+            raw_bytes=$(echo "$line" | cut -d';' -f3)
             ;;
         total)
-            raw_bytes=$(echo "$line" | cut -d';' -f11)
+            raw_bytes=$(echo "$line" | cut -d';' -f15)
             ;;
         max)
-            rx=$(echo "$line" | cut -d';' -f9)
-            tx=$(echo "$line" | cut -d';' -f10)
+            rx=$(echo "$line" | cut -d';' -f13)
+            tx=$(echo "$line" | cut -d';' -f14)
             rx=${rx:-0}
             tx=${tx:-0}
             [[ "$rx" =~ ^[0-9]+$ ]] || rx=0
@@ -281,107 +313,113 @@ get_period_start_date() {
 }
 
 # 新周期开始时保存偏移基准并清除限制
+# 新周期开始时保存偏移基准并清除限制（使用 all-time 字段 13/14/15，更稳定）
 save_offset_on_new_period() {
-    local today period_start last_mark
-    today=$(date +%Y-%m-%d)
+    local period_start last_mark line total_bytes rx tx
+
+    mkdir -p "$WORK_DIR"
+
     period_start=$(get_period_start_date)
     last_mark=$(cat "$PERIOD_MARK_FILE" 2>/dev/null || echo "")
 
     # 只要 period_start 变化，就认为进入新周期（只执行一次）
     if [ "$last_mark" != "$period_start" ]; then
-        local total_bytes=0
-        local line
+        # 强制更新 vnstat 数据库，避免 vnstatd 未刷新导致读到旧值
+        vnstat -u -i "$MAIN_INTERFACE" >/dev/null 2>&1
+
         line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>&1 || echo "")
 
-        if echo "$line" | grep -qi "Not enough data available yet"; then
-            echo "$(date '+%Y-%m-%d %H:%M:%S') 新周期检测到但 vnstat 数据尚未就绪，稍后再试（不会写入mark）" | tee -a "$LOG_FILE"
-            return
+        # vnstat 尚未就绪/输出异常：不写 mark，稍后重试
+        if echo "$line" | grep -qiE "Not enough data available yet|No data\. Timestamp of last update is same"; then
+            echo "$(date '+%Y-%m-%d %H:%M:%S') 新周期检测到但 vnstat 数据未就绪，稍后再试（不会写入 mark）line=$line" | tee -a "$LOG_FILE"
+            return 0
         fi
 
+        if [ -z "$line" ] || ! echo "$line" | grep -q ';'; then
+            echo "$(date '+%Y-%m-%d %H:%M:%S') 新周期检测到但 vnstat 输出无效，稍后再试（不会写入 mark）line=$line" | tee -a "$LOG_FILE"
+            return 0
+        fi
+
+        # 使用 all-time 累计字段（13/14/15）：不依赖 vnstat 月切换
+        total_bytes=0
         case $TRAFFIC_MODE in
-            out)   total_bytes=$(echo "$line" | cut -d';' -f10) ;;
-            in)    total_bytes=$(echo "$line" | cut -d';' -f9) ;;
-            total) total_bytes=$(echo "$line" | cut -d';' -f11) ;;
+            out)   total_bytes=$(echo "$line" | cut -d';' -f14) ;;
+            in)    total_bytes=$(echo "$line" | cut -d';' -f13) ;;
+            total) total_bytes=$(echo "$line" | cut -d';' -f15) ;;
             max)
-                local rx tx
-                rx=$(echo "$line" | cut -d';' -f9)
-                tx=$(echo "$line" | cut -d';' -f10)
+                rx=$(echo "$line" | cut -d';' -f13)
+                tx=$(echo "$line" | cut -d';' -f14)
                 rx=${rx:-0}; tx=${tx:-0}
                 [[ "$rx" =~ ^[0-9]+$ ]] || rx=0
                 [[ "$tx" =~ ^[0-9]+$ ]] || tx=0
                 total_bytes=$((rx > tx ? rx : tx))
                 ;;
+            *) total_bytes=$(echo "$line" | cut -d';' -f15) ;;
         esac
 
+        total_bytes=${total_bytes:-0}
         if ! [[ "$total_bytes" =~ ^[0-9]+$ ]]; then
-            echo "$(date '+%Y-%m-%d %H:%M:%S') 新周期基准异常(total_bytes=$total_bytes)，稍后再试（不会写入mark）" | tee -a "$LOG_FILE"
-            return
+            echo "$(date '+%Y-%m-%d %H:%M:%S') 新周期基准异常(total_bytes=$total_bytes)，稍后再试（不会写入 mark）line=$line" | tee -a "$LOG_FILE"
+            return 0
         fi
 
+        # 写入：新周期 offset = 当前 all-time 累计；本周期用量 = raw - offset 从 0 开始
         echo "$total_bytes" > "$OFFSET_FILE"
         echo "$period_start" > "$PERIOD_MARK_FILE"
 
-        echo "$(date '+%Y-%m-%d %H:%M:%S') 进入新周期：period_start=$period_start，已更新基准并清除限速/关机" | tee -a "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') 进入新周期：period_start=$period_start，写入 OFFSET_FILE=$total_bytes，并清除限速/关机" | tee -a "$LOG_FILE"
+
         tc qdisc del dev "$MAIN_INTERFACE" root 2>/dev/null
         shutdown -c 2>/dev/null
     fi
 }
 
 
+
 # 获取本周期真实使用流量（已减去偏移量）
+# 获取本周期真实使用流量（已减去偏移量，使用 all-time 字段 13/14/15）
 get_traffic_usage() {
     local offset raw_bytes real_bytes line rx tx
 
     offset=$(cat "$OFFSET_FILE" 2>/dev/null || echo 0)
+    [[ "$offset" =~ ^-?[0-9]+$ ]] || offset=0
 
-    # 把 stderr 一起抓回来，方便判断错误信息
+    # 强制更新 vnstat 数据库，避免读取旧值
+    vnstat -u -i "$MAIN_INTERFACE" >/dev/null 2>&1
+
     line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>&1 || echo "")
 
-    # 如果 vnstat 还没数据，输出提示并按 0 处理
-    if echo "$line" | grep -qi "Not enough data available yet"; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') vnstat 数据尚未准备好，暂按 0 GB 处理（接口：$MAIN_INTERFACE）" | tee -a "$LOG_FILE"
+    if echo "$line" | grep -qiE "Not enough data available yet|No data\. Timestamp of last update is same"; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') vnstat 数据尚未准备好，暂按 0 GB 处理（接口：$MAIN_INTERFACE）line=$line" | tee -a "$LOG_FILE"
         printf "0.000"
         return 0
     fi
 
-    # 如果 line 为空，也按 0 处理
-    if [ -z "$line" ]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') vnstat 输出为空，暂按 0 GB 处理（接口：$MAIN_INTERFACE）" | tee -a "$LOG_FILE"
+    if [ -z "$line" ] || ! echo "$line" | grep -q ';'; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') vnstat 输出无效，暂按 0 GB 处理（接口：$MAIN_INTERFACE）line=$line" | tee -a "$LOG_FILE"
         printf "0.000"
         return 0
     fi
 
     raw_bytes=0
     case $TRAFFIC_MODE in
-        out)
-            raw_bytes=$(echo "$line" | cut -d';' -f10)
-            ;;
-        in)
-            raw_bytes=$(echo "$line" | cut -d';' -f9)
-            ;;
-        total)
-            raw_bytes=$(echo "$line" | cut -d';' -f11)
-            ;;
+        out)   raw_bytes=$(echo "$line" | cut -d';' -f14) ;;
+        in)    raw_bytes=$(echo "$line" | cut -d';' -f13) ;;
+        total) raw_bytes=$(echo "$line" | cut -d';' -f15) ;;
         max)
-            rx=$(echo "$line" | cut -d';' -f9)
-            tx=$(echo "$line" | cut -d';' -f10)
-            rx=${rx:-0}
-            tx=${tx:-0}
-            # 如果不是数字就归零
+            rx=$(echo "$line" | cut -d';' -f13)
+            tx=$(echo "$line" | cut -d';' -f14)
+            rx=${rx:-0}; tx=${tx:-0}
             [[ "$rx" =~ ^[0-9]+$ ]] || rx=0
             [[ "$tx" =~ ^[0-9]+$ ]] || tx=0
-            if [ "$rx" -gt "$tx" ] 2>/dev/null; then
-                raw_bytes="$rx"
-            else
-                raw_bytes="$tx"
-            fi
+            raw_bytes=$((rx > tx ? rx : tx))
             ;;
+        *) raw_bytes=$(echo "$line" | cut -d';' -f15) ;;
     esac
 
     raw_bytes=${raw_bytes:-0}
-    # 再做一次数字检查，防止 cut 出来的不是数字
     if ! [[ "$raw_bytes" =~ ^[0-9]+$ ]]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') vnstat 数据异常(raw_bytes=$raw_bytes)，暂按 0 处理" | tee -a "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') vnstat 数据异常(raw_bytes=$raw_bytes)，暂按 0 处理 line=$line" | tee -a "$LOG_FILE"
         raw_bytes=0
     fi
 
