@@ -1,21 +1,36 @@
 #!/bin/bash
+# ============================================
+# TrafficCop - 流量周期统计 + 超限处理（TC限速/关机）
+# 版本：1.0.86（减少日志噪音：仅记录配置/新周期/限速状态变化）
+# 适配：vnstat oneline b（all-time 字段 13/14/15）+ traffic_period.dat
+# 路径：/root/TrafficCop/trafficcop.sh
+# ============================================
+
 # 设置 PATH 确保 cron 环境能找到所有命令
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export TZ='Asia/Shanghai'
+
 WORK_DIR="/root/TrafficCop"
 CONFIG_FILE="$WORK_DIR/traffic_config.txt"
 LOG_FILE="$WORK_DIR/traffic.log"
-SCRIPT_PATH="$WORK_DIR/traffic.sh"
 LOCK_FILE="$WORK_DIR/traffic.lock"
-OFFSET_FILE="$WORK_DIR/traffic_offset.dat"   # 新增：周期流量偏移基准文件
+OFFSET_FILE="$WORK_DIR/traffic_offset.dat"
 PERIOD_MARK_FILE="$WORK_DIR/traffic_period.dat"
+STATE_FILE="$WORK_DIR/limit_state.dat"
 
-# 设置时区为上海（东八区）
-export TZ='Asia/Shanghai'
+mkdir -p "$WORK_DIR"
 
-echo "-----------------------------------------------------" | tee -a "$LOG_FILE"
-echo "$(date '+%Y-%m-%d %H:%M:%S') 当前版本：1.0.85（修复周期不清零问题）" | tee -a "$LOG_FILE"
+# ============================================
+# 日志横幅（仅交互/初始化时输出，避免 cron 每分钟刷屏）
+# ============================================
+log_banner() {
+    echo "-----------------------------------------------------" | tee -a "$LOG_FILE"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') 当前版本：1.0.86（减少日志噪音，仅记录关键事件）" | tee -a "$LOG_FILE"
+}
 
-# 杀死其他实例
+# ============================================
+# 杀死其他实例（仅交互模式使用，cron 模式使用 flock 静默互斥）
+# ============================================
 kill_other_instances() {
     local current_pid=$$
     for pid in $(pgrep -f "$(basename "$0")"); do
@@ -26,18 +41,22 @@ kill_other_instances() {
     done
 }
 
-# 文件迁移（兼容旧版本）
+# ============================================
+# 文件迁移（兼容旧版本脚本/文件名）
+# ============================================
 migrate_files() {
     mkdir -p "$WORK_DIR"
     for file in /root/traffic_monitor_config.txt /root/traffic_monitor.log /root/.traffic_monitor_packages_installed; do
         [ -f "$file" ] && mv "$file" "$WORK_DIR/"
     done
     if crontab -l 2>/dev/null | grep -q "/root/traffic_monitor.sh"; then
-        (crontab -l 2>/dev/null | sed "s|/root/traffic_monitor.sh|$SCRIPT_PATH|g") | crontab -
+        (crontab -l 2>/dev/null | sed "s|/root/traffic_monitor.sh|/root/TrafficCop/trafficcop.sh|g") | crontab -
     fi
 }
 
-# 安装必要软件包
+# ============================================
+# 安装依赖（vnstat/jq/bc/iproute2/cron）
+# ============================================
 check_and_install_packages() {
     local packages=("vnstat" "jq" "bc" "iproute2" "cron")
     for package in "${packages[@]}"; do
@@ -45,26 +64,28 @@ check_and_install_packages() {
             apt-get update && apt-get install -y "$package"
         }
     done
-    local main_interface=$(ip route | grep default | awk '{print $5}' | head -n1)
+    local main_interface
+    main_interface=$(ip route | grep default | awk '{print $5}' | head -n1)
     echo "$(date '+%Y-%m-%d %H:%M:%S') 主要网络接口: ${main_interface:-未知}" | tee -a "$LOG_FILE"
 }
 
-# 读写配置
-# 读配置（更鲁棒：只解析 KEY=VALUE 行，避免 source 因为中文/杂项失败）
+# ============================================
+# 读取配置（仅解析 KEY=VALUE，避免中文/杂项导致 source 失败）
+# ============================================
 read_config() {
     if [ ! -f "$CONFIG_FILE" ]; then
         echo "$(date '+%Y-%m-%d %H:%M:%S') 配置文件不存在：$CONFIG_FILE" | tee -a "$LOG_FILE"
         return 1
     fi
 
-    # 只取形如 AAA=BBB 的行，忽略其它任何内容（包括中文说明/空格/日志）
+    unset TRAFFIC_MODE TRAFFIC_PERIOD TRAFFIC_LIMIT TRAFFIC_TOLERANCE PERIOD_START_DAY LIMIT_SPEED MAIN_INTERFACE LIMIT_MODE
+
     # shellcheck disable=SC1090
     source <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$CONFIG_FILE" | sed 's/\r$//') 2>/dev/null || {
         echo "$(date '+%Y-%m-%d %H:%M:%S') 配置加载失败（可能包含非法行）：$CONFIG_FILE" | tee -a "$LOG_FILE"
         return 1
     }
 
-    # 兜底默认值，防止缺字段导致后续为空
     TRAFFIC_MODE=${TRAFFIC_MODE:-total}
     TRAFFIC_PERIOD=${TRAFFIC_PERIOD:-monthly}
     TRAFFIC_LIMIT=${TRAFFIC_LIMIT:-0}
@@ -73,18 +94,34 @@ read_config() {
     LIMIT_SPEED=${LIMIT_SPEED:-20}
     LIMIT_MODE=${LIMIT_MODE:-tc}
 
+    # PERIOD_START_DAY 防呆：必须是 1-31
+    if ! [[ "$PERIOD_START_DAY" =~ ^([1-9]|[12][0-9]|3[01])$ ]]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') PERIOD_START_DAY 非法($PERIOD_START_DAY)，强制设为 1" | tee -a "$LOG_FILE"
+        PERIOD_START_DAY=1
+    fi
+
     # 主接口兜底：配置没写就自动探测
     if [ -z "$MAIN_INTERFACE" ]; then
         MAIN_INTERFACE=$(ip route | awk '/default/ {print $5; exit}')
         [ -z "$MAIN_INTERFACE" ] && MAIN_INTERFACE=$(ip link | awk -F': ' '/state UP/ {print $2; exit}')
     fi
 
-    echo "$(date '+%Y-%m-%d %H:%M:%S') 已加载配置：MODE=$TRAFFIC_MODE PERIOD=$TRAFFIC_PERIOD IFACE=$MAIN_INTERFACE LIMIT=$TRAFFIC_LIMIT TOL=$TRAFFIC_TOLERANCE LIMIT_MODE=$LIMIT_MODE" | tee -a "$LOG_FILE"
+    if [ -z "$MAIN_INTERFACE" ] || ! ip link show "$MAIN_INTERFACE" >/dev/null 2>&1; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') 主接口无效/不存在：MAIN_INTERFACE=$MAIN_INTERFACE（请检查配置）" | tee -a "$LOG_FILE"
+        return 1
+    fi
+
+    # 注意：此处只在交互模式会打印（cron 模式不会调用 log_banner，但 read_config 仍可能输出错误）
+    echo "$(date '+%Y-%m-%d %H:%M:%S') 已加载配置：MODE=$TRAFFIC_MODE PERIOD=$TRAFFIC_PERIOD START_DAY=$PERIOD_START_DAY IFACE=$MAIN_INTERFACE LIMIT=$TRAFFIC_LIMIT TOL=$TRAFFIC_TOLERANCE LIMIT_MODE=$LIMIT_MODE" | tee -a "$LOG_FILE"
     return 0
 }
 
+# ============================================
+# 写入配置（保证配置文件只包含 KEY=VALUE）
+# ============================================
 write_config() {
-    cat > "$CONFIG_FILE" << EOF
+    mkdir -p "$WORK_DIR"
+    cat > "$CONFIG_FILE" <<EOF
 TRAFFIC_MODE=$TRAFFIC_MODE
 TRAFFIC_PERIOD=$TRAFFIC_PERIOD
 TRAFFIC_LIMIT=$TRAFFIC_LIMIT
@@ -96,9 +133,12 @@ LIMIT_MODE=$LIMIT_MODE
 EOF
 }
 
-# 获取主要接口（带手动选择）
+# ============================================
+# 获取主网卡（交互选择）
+# ============================================
 get_main_interface() {
-    local iface=$(ip route | grep default | awk '{print $5}' | head -n1)
+    local iface
+    iface=$(ip route | grep default | awk '{print $5}' | head -n1)
     [ -z "$iface" ] && iface=$(ip link | grep 'state UP' | awk -F: '{print $2}' | head -n1 | xargs)
     while true; do
         read -p "检测到主要接口: ${iface:-无}，直接回车使用或输入新接口: " input
@@ -108,8 +148,9 @@ get_main_interface() {
     done
 }
 
-# 初始配置
-# 初始配置
+# ============================================
+# 初始配置向导（交互设置模式/周期/限速/基准 offset）
+# ============================================
 initial_config() {
     MAIN_INTERFACE=$(get_main_interface)
 
@@ -172,148 +213,136 @@ initial_config() {
     echo "=============================================="
     read -r -p "请输入当前本周期实际已使用流量(GB，默认0): " real_gb
 
-    # 回车默认 0：按你的原意直接写 0
     if [ -z "$real_gb" ]; then
         echo 0 > "$OFFSET_FILE" || { echo "写入 OFFSET_FILE 失败：$OFFSET_FILE"; return 1; }
-        echo "$(date '+%Y-%m-%d %H:%M:%S') 首次初始化 OFFSET_FILE，设置为 0（本周期从 0GB 开始统计）" | tee -a "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') 首次初始化 OFFSET_FILE=0（本周期从 0GB 开始统计）" | tee -a "$LOG_FILE"
         return 0
     fi
 
-    # 校验输入是否为数字
     if ! [[ "$real_gb" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
         echo "输入格式不正确，已按 0GB 处理。"
         echo 0 > "$OFFSET_FILE" || { echo "写入 OFFSET_FILE 失败：$OFFSET_FILE"; return 1; }
-        echo "$(date '+%Y-%m-%d %H:%M:%S') OFFSET_FILE 设置为 0（用户输入无效）" | tee -a "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') OFFSET_FILE=0（用户输入无效）" | tee -a "$LOG_FILE"
         return 0
     fi
 
-    # 读取当前 vnstat 累计字节数 raw_bytes
     local line raw_bytes rx tx real_bytes new_offset
-    line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>&1 || echo "")
+    vnstat -u -i "$MAIN_INTERFACE" >/dev/null 2>&1
+    line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>/dev/null || echo "")
 
-    # 情况 A：vnstat 还没数据 / 未更新 —— 按 raw_bytes=0 处理，也允许写负 offset
-    if echo "$line" | grep -qiE "Not enough data available yet|No data\. Timestamp of last update is same"; then
-        raw_bytes=0
-        real_bytes=$(echo "$real_gb * 1024 * 1024 * 1024" | bc | cut -d'.' -f1)
-        new_offset=$((raw_bytes - real_bytes))
-
-        echo "$new_offset" > "$OFFSET_FILE" || { echo "写入 OFFSET_FILE 失败：$OFFSET_FILE"; return 1; }
-
-        echo "--------------------------------------"
-        echo "vnstat 尚无历史数据，按 raw_bytes=0 处理"
-        echo "设定本周期使用量       : $real_gb GB"
-        echo "新的 offset            : $new_offset"
-        echo "（后续统计：已用 = 当前累计 - offset，将从 ${real_gb}GB 附近开始往上增长）"
-        echo "--------------------------------------"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') 初始化：vnstat 无历史数据，按 raw_bytes=0 处理，设置 OFFSET_FILE=$new_offset（对应本周期已用 $real_gb GB）" | tee -a "$LOG_FILE"
-        return 0
-    fi
-
-    # 情况 B：vnstat 输出为空
-    if [ -z "$line" ]; then
-        echo "vnstat 输出为空，已将 OFFSET_FILE 设置为 0。"
+    if [ -z "$line" ] || ! echo "$line" | grep -q ';'; then
+        echo "vnstat 输出无效，已将 OFFSET_FILE 设置为 0。"
         echo 0 > "$OFFSET_FILE" || { echo "写入 OFFSET_FILE 失败：$OFFSET_FILE"; return 1; }
-        echo "$(date '+%Y-%m-%d %H:%M:%S') 初始化：vnstat 输出为空，OFFSET_FILE 强制设为 0" | tee -a "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') 初始化：vnstat 输出无效，OFFSET_FILE=0" | tee -a "$LOG_FILE"
         return 0
     fi
 
-    # 情况 C：不是有效的 oneline 数据格式（必须含 ';'）
-    if ! echo "$line" | grep -q ';'; then
-        echo "vnstat 输出不是有效的 oneline 数据：$line"
-        echo 0 > "$OFFSET_FILE" || { echo "写入 OFFSET_FILE 失败：$OFFSET_FILE"; return 1; }
-        echo "$(date '+%Y-%m-%d %H:%M:%S') 初始化：vnstat oneline 非数据输出($line)，OFFSET_FILE 强制设为 0" | tee -a "$LOG_FILE"
-        return 0
-    fi
-
-    # 情况 D：vnstat 有正常数据，按模式取 raw_bytes
+    # all-time 字段：in=13 out=14 total=15
     raw_bytes=0
     case $TRAFFIC_MODE in
-        out)
-            raw_bytes=$(echo "$line" | cut -d';' -f14)
-            ;;
-        in)
-            raw_bytes=$(echo "$line" | cut -d';' -f3)
-            ;;
-        total)
-            raw_bytes=$(echo "$line" | cut -d';' -f15)
-            ;;
+        out)   raw_bytes=$(echo "$line" | cut -d';' -f14) ;;
+        in)    raw_bytes=$(echo "$line" | cut -d';' -f13) ;;
+        total) raw_bytes=$(echo "$line" | cut -d';' -f15) ;;
         max)
             rx=$(echo "$line" | cut -d';' -f13)
             tx=$(echo "$line" | cut -d';' -f14)
-            rx=${rx:-0}
-            tx=${tx:-0}
+            rx=${rx:-0}; tx=${tx:-0}
             [[ "$rx" =~ ^[0-9]+$ ]] || rx=0
             [[ "$tx" =~ ^[0-9]+$ ]] || tx=0
-            if [ "$rx" -gt "$tx" ] 2>/dev/null; then
-                raw_bytes="$rx"
-            else
-                raw_bytes="$tx"
-            fi
+            raw_bytes=$((rx > tx ? rx : tx))
             ;;
-        *)
-            raw_bytes=0
-            ;;
+        *) raw_bytes=$(echo "$line" | cut -d';' -f15) ;;
     esac
 
     raw_bytes=${raw_bytes:-0}
-
-    # 防止 raw_bytes 不是数字
     if ! [[ "$raw_bytes" =~ ^[0-9]+$ ]]; then
-        echo "vnstat 返回的累计流量不是纯数字(raw_bytes=$raw_bytes)，OFFSET_FILE 将设为 0。"
+        echo "vnstat 返回累计流量异常(raw_bytes=$raw_bytes)，OFFSET_FILE 将设为 0。"
         echo 0 > "$OFFSET_FILE" || { echo "写入 OFFSET_FILE 失败：$OFFSET_FILE"; return 1; }
-        echo "$(date '+%Y-%m-%d %H:%M:%S') 初始化：raw_bytes 异常($raw_bytes)，OFFSET_FILE 强制设为 0" | tee -a "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') 初始化：raw_bytes 异常，OFFSET_FILE=0" | tee -a "$LOG_FILE"
         return 0
     fi
 
-    # real_gb 转字节（1024^3）
     real_bytes=$(echo "$real_gb * 1024 * 1024 * 1024" | bc | cut -d'.' -f1)
-
-    # 得到新的 offset（允许为负数）
     new_offset=$((raw_bytes - real_bytes))
 
     echo "$new_offset" > "$OFFSET_FILE" || { echo "写入 OFFSET_FILE 失败：$OFFSET_FILE"; return 1; }
-
-    echo "--------------------------------------"
-    echo "当前累计流量 raw_bytes : $raw_bytes bytes"
-    echo "设定本周期使用量       : $real_gb GB"
-    echo "新的 offset            : $new_offset"
-    echo "（后续统计：已用 = 当前累计 - offset，将从 ${real_gb}GB 附近开始往上增长）"
-    echo "--------------------------------------"
-    echo "$(date '+%Y-%m-%d %H:%M:%S') 初始化：首次配置时设置 OFFSET_FILE=$new_offset（对应本周期已用 $real_gb GB）" | tee -a "$LOG_FILE"
-
+    echo "$(date '+%Y-%m-%d %H:%M:%S') 初始化：OFFSET_FILE=$new_offset（对应本周期已用 $real_gb GB）" | tee -a "$LOG_FILE"
     return 0
 }
 
-
-# 获取当前周期起始日期
+# ============================================
+# 计算当前周期起始日（支持 monthly/quarterly/yearly，按 PERIOD_START_DAY）
+# ============================================
 get_period_start_date() {
-    local y=$(date +%Y) m=$(date +%m) d=$(date +%d)
-    case $TRAFFIC_PERIOD in
+    # 工具：返回某年某月的最后一天（数字）
+    _last_day_of_month() {
+        date -d "$1-$2-01 +1 month -1 day" +%d 2>/dev/null
+    }
+
+    local y m d
+    y=$(date +%Y)
+    m=$(date +%m)
+    d=$(date +%d)
+
+    local mm=$((10#$m))
+    local dd=$((10#$d))
+
+    local sd="$PERIOD_START_DAY"
+    if ! [[ "$sd" =~ ^([1-9]|[12][0-9]|3[01])$ ]]; then
+        sd=1
+    fi
+
+    case "$TRAFFIC_PERIOD" in
         monthly)
-            if [ $d -lt $PERIOD_START_DAY ]; then
-                date -d "$y-$m-$PERIOD_START_DAY -1 month" +%Y-%m-%d 2>/dev/null || date -d "$y-$(expr $m - 1)-$PERIOD_START_DAY" +%Y-%m-%d
+            if (( dd < sd )); then
+                local py pm last_prev
+                py=$(date -d "$y-$m-01 -1 day" +%Y)
+                pm=$(date -d "$y-$m-01 -1 day" +%m)
+                last_prev=$(_last_day_of_month "$py" "$pm")
+                (( sd > 10#$last_prev )) && sd=$((10#$last_prev))
+                date -d "$py-$pm-$(printf "%02d" "$sd")" +%Y-%m-%d
             else
-                date -d "$y-$m-$PERIOD_START_DAY" +%Y-%m-%d
-            fi ;;
+                local last_cur
+                last_cur=$(_last_day_of_month "$y" "$m")
+                (( sd > 10#$last_cur )) && sd=$((10#$last_cur))
+                date -d "$y-$m-$(printf "%02d" "$sd")" +%Y-%m-%d
+            fi
+            ;;
         quarterly)
-            local qm=$(( ((m-1)/3*3 +1) ))
-            qm=$(printf "%02d" $qm)
-            if [ $d -lt $PERIOD_START_DAY ]; then
-                date -d "$y-$qm-$PERIOD_START_DAY -3 months" +%Y-%m-%d
+            local qstart=$(( ( (mm-1)/3 )*3 + 1 ))
+            local qs_month
+            qs_month=$(printf "%02d" "$qstart")
+
+            if (( mm == qstart && dd < sd )); then
+                local qy qm last_qm
+                qy=$(date -d "$y-$qs_month-01 -3 months" +%Y)
+                qm=$(date -d "$y-$qs_month-01 -3 months" +%m)
+                last_qm=$(_last_day_of_month "$qy" "$qm")
+                (( sd > 10#$last_qm )) && sd=$((10#$last_qm))
+                date -d "$qy-$qm-$(printf "%02d" "$sd")" +%Y-%m-%d
             else
-                date -d "$y-$qm-$PERIOD_START_DAY" +%Y-%m-%d
-            fi ;;
+                local last_qs
+                last_qs=$(_last_day_of_month "$y" "$qs_month")
+                (( sd > 10#$last_qs )) && sd=$((10#$last_qs))
+                date -d "$y-$qs_month-$(printf "%02d" "$sd")" +%Y-%m-%d
+            fi
+            ;;
         yearly)
-            if [ $d -lt $PERIOD_START_DAY ]; then
-                date -d "$((y-1))-$PERIOD_START_DAY +1 year -1 day" +%Y-%m-%d
+            if (( mm == 1 && dd < sd )); then
+                date -d "$((y-1))-01-$(printf "%02d" "$sd")" +%Y-%m-%d
             else
-                date -d "$y-01-$PERIOD_START_DAY" +%Y-%m-%d
-            fi ;;
+                date -d "$y-01-$(printf "%02d" "$sd")" +%Y-%m-%d
+            fi
+            ;;
+        *)
+            date -d "$y-$m-$(printf "%02d" "$sd")" +%Y-%m-%d
+            ;;
     esac
 }
 
-# 新周期开始时保存偏移基准并清除限制
-# 新周期开始时保存偏移基准并清除限制（使用 all-time 字段 13/14/15，更稳定）
+# ============================================
+# 新周期检测：period_start 变化时更新 OFFSET 与 PERIOD_MARK，并清除限速
+# ============================================
 save_offset_on_new_period() {
     local period_start last_mark line total_bytes rx tx
 
@@ -322,25 +351,16 @@ save_offset_on_new_period() {
     period_start=$(get_period_start_date)
     last_mark=$(cat "$PERIOD_MARK_FILE" 2>/dev/null || echo "")
 
-    # 只要 period_start 变化，就认为进入新周期（只执行一次）
     if [ "$last_mark" != "$period_start" ]; then
-        # 强制更新 vnstat 数据库，避免 vnstatd 未刷新导致读到旧值
         vnstat -u -i "$MAIN_INTERFACE" >/dev/null 2>&1
-
-        line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>&1 || echo "")
-
-        # vnstat 尚未就绪/输出异常：不写 mark，稍后重试
-        if echo "$line" | grep -qiE "Not enough data available yet|No data\. Timestamp of last update is same"; then
-            echo "$(date '+%Y-%m-%d %H:%M:%S') 新周期检测到但 vnstat 数据未就绪，稍后再试（不会写入 mark）line=$line" | tee -a "$LOG_FILE"
-            return 0
-        fi
+        line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>/dev/null || echo "")
 
         if [ -z "$line" ] || ! echo "$line" | grep -q ';'; then
-            echo "$(date '+%Y-%m-%d %H:%M:%S') 新周期检测到但 vnstat 输出无效，稍后再试（不会写入 mark）line=$line" | tee -a "$LOG_FILE"
+            # 不写 mark，稍后 cron 再试
+            echo "$(date '+%Y-%m-%d %H:%M:%S') 新周期检测到但 vnstat 输出无效，稍后重试（不写入 mark）" | tee -a "$LOG_FILE"
             return 0
         fi
 
-        # 使用 all-time 累计字段（13/14/15）：不依赖 vnstat 月切换
         total_bytes=0
         case $TRAFFIC_MODE in
             out)   total_bytes=$(echo "$line" | cut -d';' -f14) ;;
@@ -359,44 +379,33 @@ save_offset_on_new_period() {
 
         total_bytes=${total_bytes:-0}
         if ! [[ "$total_bytes" =~ ^[0-9]+$ ]]; then
-            echo "$(date '+%Y-%m-%d %H:%M:%S') 新周期基准异常(total_bytes=$total_bytes)，稍后再试（不会写入 mark）line=$line" | tee -a "$LOG_FILE"
+            echo "$(date '+%Y-%m-%d %H:%M:%S') 新周期基准异常(total_bytes=$total_bytes)，稍后重试（不写入 mark）" | tee -a "$LOG_FILE"
             return 0
         fi
 
-        # 写入：新周期 offset = 当前 all-time 累计；本周期用量 = raw - offset 从 0 开始
         echo "$total_bytes" > "$OFFSET_FILE"
         echo "$period_start" > "$PERIOD_MARK_FILE"
 
-        echo "$(date '+%Y-%m-%d %H:%M:%S') 进入新周期：period_start=$period_start，写入 OFFSET_FILE=$total_bytes，并清除限速/关机" | tee -a "$LOG_FILE"
-
+        echo "$(date '+%Y-%m-%d %H:%M:%S') 进入新周期：$last_mark -> $period_start，写入 OFFSET_FILE=$total_bytes，并清除限速/关机" | tee -a "$LOG_FILE"
         tc qdisc del dev "$MAIN_INTERFACE" root 2>/dev/null
         shutdown -c 2>/dev/null
+        echo "normal" > "$STATE_FILE" 2>/dev/null || true
     fi
 }
 
-
-
-# 获取本周期真实使用流量（已减去偏移量）
-# 获取本周期真实使用流量（已减去偏移量，使用 all-time 字段 13/14/15）
+# ============================================
+# 读取本周期用量（GB）：all-time(raw) - offset，输出 3 位小数
+# ============================================
 get_traffic_usage() {
     local offset raw_bytes real_bytes line rx tx
 
     offset=$(cat "$OFFSET_FILE" 2>/dev/null || echo 0)
     [[ "$offset" =~ ^-?[0-9]+$ ]] || offset=0
 
-    # 强制更新 vnstat 数据库，避免读取旧值
     vnstat -u -i "$MAIN_INTERFACE" >/dev/null 2>&1
-
-    line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>&1 || echo "")
-
-    if echo "$line" | grep -qiE "Not enough data available yet|No data\. Timestamp of last update is same"; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') vnstat 数据尚未准备好，暂按 0 GB 处理（接口：$MAIN_INTERFACE）line=$line" | tee -a "$LOG_FILE"
-        printf "0.000"
-        return 0
-    fi
+    line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>/dev/null || echo "")
 
     if [ -z "$line" ] || ! echo "$line" | grep -q ';'; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') vnstat 输出无效，暂按 0 GB 处理（接口：$MAIN_INTERFACE）line=$line" | tee -a "$LOG_FILE"
         printf "0.000"
         return 0
     fi
@@ -418,10 +427,7 @@ get_traffic_usage() {
     esac
 
     raw_bytes=${raw_bytes:-0}
-    if ! [[ "$raw_bytes" =~ ^[0-9]+$ ]]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') vnstat 数据异常(raw_bytes=$raw_bytes)，暂按 0 处理 line=$line" | tee -a "$LOG_FILE"
-        raw_bytes=0
-    fi
+    [[ "$raw_bytes" =~ ^[0-9]+$ ]] || raw_bytes=0
 
     real_bytes=$((raw_bytes - offset))
     [ "$real_bytes" -lt 0 ] && real_bytes=0
@@ -429,46 +435,74 @@ get_traffic_usage() {
     printf "%.3f" "$(echo "scale=6; $real_bytes/1024/1024/1024" | bc 2>/dev/null || echo 0)"
 }
 
-
-# 检查并执行限速/关机
+# ============================================
+# 超限处理：仅在状态变化时记录日志（limited <-> normal）
+# ============================================
 check_and_limit_traffic() {
-    local usage=$(get_traffic_usage)
-    local threshold=$(echo "$TRAFFIC_LIMIT - $TRAFFIC_TOLERANCE" | bc)
-    echo "$(date '+%Y-%m-%d %H:%M:%S') 本周期已用: $usage GB  阈值: $threshold GB" | tee -a "$LOG_FILE"
-    if (( $(echo "$usage > $threshold" | bc -l) )); then
-        if [ "$LIMIT_MODE" = "tc" ]; then
-            tc qdisc add dev "$MAIN_INTERFACE" root tbf rate ${LIMIT_SPEED}kbit burst 32kbit latency 400ms 2>/dev/null || \
-            tc qdisc change dev "$MAIN_INTERFACE" root tbf rate ${LIMIT_SPEED}kbit burst 32kbit latency 400ms
-            echo "$(date '+%Y-%m-%d %H:%M:%S') 已限速至 ${LIMIT_SPEED}kbit" | tee -a "$LOG_FILE"
-        else
-            echo "$(date '+%Y-%m-%d %H:%M:%S') 流量超限，60秒后关机" | tee -a "$LOG_FILE"
-            shutdown -h +1 "流量超限自动关机"
+    local usage threshold prev_state new_state
+
+    usage=$(get_traffic_usage)
+    threshold=$(echo "$TRAFFIC_LIMIT - $TRAFFIC_TOLERANCE" | bc 2>/dev/null || echo 0)
+
+    prev_state=$(cat "$STATE_FILE" 2>/dev/null || echo "normal")
+    new_state="$prev_state"
+
+    if (( $(echo "$usage > $threshold" | bc -l 2>/dev/null || echo 0) )); then
+        new_state="limited"
+        if [ "$prev_state" != "limited" ]; then
+            if [ "$LIMIT_MODE" = "tc" ]; then
+                tc qdisc add dev "$MAIN_INTERFACE" root tbf rate ${LIMIT_SPEED}kbit burst 32kbit latency 400ms 2>/dev/null || \
+                tc qdisc change dev "$MAIN_INTERFACE" root tbf rate ${LIMIT_SPEED}kbit burst 32kbit latency 400ms
+                echo "$(date '+%Y-%m-%d %H:%M:%S') 流量超限：已用 ${usage}GB > 阈值 ${threshold}GB，开始限速 ${LIMIT_SPEED}kbit" | tee -a "$LOG_FILE"
+            else
+                echo "$(date '+%Y-%m-%d %H:%M:%S') 流量超限：已用 ${usage}GB > 阈值 ${threshold}GB，60秒后关机" | tee -a "$LOG_FILE"
+                shutdown -h +1 "流量超限自动关机"
+            fi
         fi
     else
-        tc qdisc del dev "$MAIN_INTERFACE" root 2>/dev/null
-        shutdown -c 2>/dev/null
+        new_state="normal"
+        if [ "$prev_state" != "normal" ]; then
+            tc qdisc del dev "$MAIN_INTERFACE" root 2>/dev/null
+            shutdown -c 2>/dev/null
+            echo "$(date '+%Y-%m-%d %H:%M:%S') 流量恢复：已用 ${usage}GB <= 阈值 ${threshold}GB，解除限速/取消关机" | tee -a "$LOG_FILE"
+        fi
     fi
+
+    echo "$new_state" > "$STATE_FILE" 2>/dev/null || true
 }
 
-# 设置每分钟定时任务
+# ============================================
+# 设置 cron：每分钟执行一次本脚本 --run（自动获取真实路径）
+# ============================================
 setup_crontab() {
-    (crontab -l 2>/dev/null | grep -v "$SCRIPT_PATH --run"; echo "* * * * * $SCRIPT_PATH --run") | crontab -
+    local self
+    self="$(readlink -f "$0" 2>/dev/null || echo "/root/TrafficCop/trafficcop.sh")"
+    (crontab -l 2>/dev/null | grep -v " $self --run" | grep -v "/root/TrafficCop/traffic.sh --run" ; echo "* * * * * $self --run") | crontab -
 }
 
-# 主函数
+# ============================================
+# 主流程：--run 为 cron 模式（静默+互斥），否则交互配置模式
+# ============================================
 main() {
-    kill_other_instances
-    migrate_files
     cd "$WORK_DIR" || exit 1
-    exec 9>"$LOCK_FILE"
-    flock -n 9 || { echo "脚本正在运行中" | tee -a "$LOG_FILE"; exit 1; }
 
+    # cron 模式：不打印横线/版本，不互杀，只做互斥+核心逻辑
     if [ "$1" = "--run" ]; then
-        read_config && save_offset_on_new_period && check_and_limit_traffic
+        exec 9>"$LOCK_FILE"
+        flock -n 9 || exit 0
+
+        read_config || exit 0
+        save_offset_on_new_period
+        check_and_limit_traffic
         exit 0
     fi
 
+    # 交互模式：打印横幅/迁移/安装/配置
+    log_banner
+    kill_other_instances
+    migrate_files
     check_and_install_packages
+
     if read_config; then
         echo "检测到已有配置，5秒内按任意键修改，否则保持"
         if read -t 5 -n 1; then
@@ -477,12 +511,13 @@ main() {
     else
         initial_config
     fi
+
     setup_crontab
     write_config
-    save_offset_on_new_period   # 确保首次部署也正确初始化
-    echo "$(date '+%Y-%m-%d %H:%M:%S') 配置完成，每分钟自动检查一次" | tee -a "$LOG_FILE"
+    save_offset_on_new_period
+
+    echo "$(date '+%Y-%m-%d %H:%M:%S') 配置完成：已设置每分钟自动检查（cron）" | tee -a "$LOG_FILE"
     echo "$(date '+%Y-%m-%d %H:%M:%S') 当前本周期已用流量: $(get_traffic_usage) GB" | tee -a "$LOG_FILE"
 }
 
 main "$@"
-echo "-----------------------------------------------------" | tee -a "$LOG_FILE"
