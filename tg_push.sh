@@ -74,11 +74,22 @@ EOF
 
 read_traffic_config() {
     [ ! -s "$TRAFFIC_CONFIG" ] && return 1
+
+    # 清理旧值，避免残留污染
+    unset MAIN_INTERFACE TRAFFIC_MODE TRAFFIC_LIMIT TRAFFIC_TOLERANCE TRAFFIC_PERIOD PERIOD_START_DAY
+
+    # 只读取 KEY=VALUE 行，忽略中文说明/空行/杂项
     # shellcheck disable=SC1090
-    source "$TRAFFIC_CONFIG" 2>/dev/null
+    source <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$TRAFFIC_CONFIG" | sed 's/\r$//') 2>/dev/null || return 1
+
     [[ -z "$MAIN_INTERFACE" || -z "$TRAFFIC_MODE" || -z "$TRAFFIC_LIMIT" || -z "$TRAFFIC_TOLERANCE" ]] && return 1
+
+    # 接口校验（避免后面 vnstat/tc 报一堆但你看不出来原因）
+    ip link show "$MAIN_INTERFACE" >/dev/null 2>&1 || return 1
+
     return 0
 }
+
 
 # ==================== 周期计算 ====================
 get_period_start_date() {
@@ -115,28 +126,43 @@ get_period_end_date() {
 
 # ==================== 流量读取（vnstat + offset） ====================
 get_traffic_usage() {
-    local offset raw=0 line rx tx
-    offset=$(cat "$OFFSET_FILE" 2>/dev/null || echo 0)
-    line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>/dev/null || echo "")
+    local offset raw=0 line rx tx real
 
+    offset=$(cat "$OFFSET_FILE" 2>/dev/null || echo 0)
+    [[ "$offset" =~ ^-?[0-9]+$ ]] || offset=0
+
+    # 强制更新 vnstat 数据库，避免读到旧值
+    vnstat -u -i "$MAIN_INTERFACE" >/dev/null 2>&1
+
+    line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>/dev/null || echo "")
+    [ -z "$line" ] && { printf "0.000"; return 0; }
+    echo "$line" | grep -q ';' || { printf "0.000"; return 0; }
+
+    # 使用 all-time：in=13 out=14 total=15
     case $TRAFFIC_MODE in
-        out)   raw=$(echo "$line" | cut -d';' -f10) ;;
-        in)    raw=$(echo "$line" | cut -d';' -f9) ;;
-        total) raw=$(echo "$line" | cut -d';' -f11) ;;
+        out)   raw=$(echo "$line" | cut -d';' -f14) ;;
+        in)    raw=$(echo "$line" | cut -d';' -f13) ;;
+        total) raw=$(echo "$line" | cut -d';' -f15) ;;
         max)
-            rx=$(echo "$line" | cut -d';' -f9)
-            tx=$(echo "$line" | cut -d';' -f10)
-            [[ $rx -gt $tx ]] 2>/dev/null && raw=$rx || raw=$tx
+            rx=$(echo "$line" | cut -d';' -f13)
+            tx=$(echo "$line" | cut -d';' -f14)
+            rx=${rx:-0}; tx=${tx:-0}
+            [[ "$rx" =~ ^[0-9]+$ ]] || rx=0
+            [[ "$tx" =~ ^[0-9]+$ ]] || tx=0
+            raw=$(( rx > tx ? rx : tx ))
             ;;
         *) raw=0 ;;
     esac
 
     raw=${raw:-0}
-    local real=$((raw - offset))
+    [[ "$raw" =~ ^[0-9]+$ ]] || raw=0
+
+    real=$((raw - offset))
     (( real < 0 )) && real=0
 
     printf "%.3f" "$(echo "scale=6; $real/1024/1024/1024" | bc 2>/dev/null || echo 0)"
 }
+
 
 # ==================== Telegram 发送 ====================
 tg_send() {
@@ -237,30 +263,43 @@ flow_setting() {
     [[ ! $real_gb =~ ^[0-9]+(\.[0-9]+)?$ ]] && { echo "输入无效"; return; }
     read_traffic_config || return
 
-    local line raw rx tx
-    line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>/dev/null)
+    # 强制更新 vnstat 数据库
+    vnstat -u -i "$MAIN_INTERFACE" >/dev/null 2>&1
 
+    local line raw rx tx
+    line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>/dev/null || echo "")
+    [ -z "$line" ] && { echo "vnstat 无输出"; return; }
+    echo "$line" | grep -q ';' || { echo "vnstat 输出无效：$line"; return; }
+
+    # all-time：in=13 out=14 total=15
     case $TRAFFIC_MODE in
-        out)   raw=$(echo "$line" | cut -d';' -f10) ;;
-        in)    raw=$(echo "$line" | cut -d';' -f9) ;;
-        total) raw=$(echo "$line" | cut -d';' -f11) ;;
+        out)   raw=$(echo "$line" | cut -d';' -f14) ;;
+        in)    raw=$(echo "$line" | cut -d';' -f13) ;;
+        total) raw=$(echo "$line" | cut -d';' -f15) ;;
         max)
-            rx=$(echo "$line" | cut -d';' -f9)
-            tx=$(echo "$line" | cut -d';' -f10)
-            [[ $rx -gt $tx ]] 2>/dev/null && raw=$rx || raw=$tx
+            rx=$(echo "$line" | cut -d';' -f13)
+            tx=$(echo "$line" | cut -d';' -f14)
+            rx=${rx:-0}; tx=${tx:-0}
+            [[ "$rx" =~ ^[0-9]+$ ]] || rx=0
+            [[ "$tx" =~ ^[0-9]+$ ]] || tx=0
+            raw=$(( rx > tx ? rx : tx ))
             ;;
         *) raw=0 ;;
     esac
 
     raw=${raw:-0}
+    [[ "$raw" =~ ^[0-9]+$ ]] || raw=0
+
     local target_bytes
     target_bytes=$(echo "$real_gb * 1024*1024*1024" | bc 2>/dev/null | cut -d. -f1)
     target_bytes=${target_bytes:-0}
+    [[ "$target_bytes" =~ ^[0-9]+$ ]] || target_bytes=0
 
     local new_offset=$((raw - target_bytes))
     echo "$new_offset" > "$OFFSET_FILE"
     echo "已修正 offset → $new_offset（当前显示 ≈${real_gb} GB）"
 }
+
 
 # ==================== 配置向导 ====================
 initial_config() {
