@@ -232,6 +232,13 @@ update_all_scripts() {
 }
 
 # 读取当前总流量（不再 source trafficcop.sh，直接读配置+vnstat）
+# ============================================
+# 读取当前总流量（与 trafficcop.sh 口径一致：all-time 字段 13/14/15）
+# - 读取 traffic_config.txt（仅解析 KEY=VALUE）
+# - 读取 traffic_offset.dat
+# - vnstat --oneline b 使用 all-time：
+#   in=13 out=14 total=15
+# ============================================
 Traffic_all() {
     local config_file="$WORK_DIR/traffic_config.txt"
     local offset_file="$WORK_DIR/traffic_offset.dat"
@@ -242,48 +249,53 @@ Traffic_all() {
         return 1
     fi
 
-    # 读取配置：TRAFFIC_MODE / TRAFFIC_PERIOD / PERIOD_START_DAY / MAIN_INTERFACE / 限制等
+    # 只解析 KEY=VALUE，避免中文/空格/杂项导致 source 失败
     # shellcheck disable=SC1090
-    source "$config_file"
+    source <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$config_file" | sed 's/\r$//') 2>/dev/null || {
+        echo -e "${RED}配置加载失败（可能包含非法行）：$config_file${NC}"
+        return 1
+    }
 
-    # 读 OFFSET，如果没有就按 0
+    # 兜底
+    TRAFFIC_MODE=${TRAFFIC_MODE:-total}
+    TRAFFIC_PERIOD=${TRAFFIC_PERIOD:-monthly}
+    PERIOD_START_DAY=${PERIOD_START_DAY:-1}
+    MAIN_INTERFACE=${MAIN_INTERFACE:-eth0}
+
+    # OFFSET（没有就按 0）
     local offset
     offset=$(cat "$offset_file" 2>/dev/null || echo 0)
-    [[ -z "$offset" ]] && offset=0
+    [[ "$offset" =~ ^-?[0-9]+$ ]] || offset=0
 
-    # 从 vnstat 取当前累计字节数
+    # 强制刷新 vnstat 数据库，避免读到旧值
+    vnstat -u -i "$MAIN_INTERFACE" >/dev/null 2>&1
+
+    # 读取 vnstat oneline
     local line raw_bytes rx tx
-    line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>&1 || echo "")
+    line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>/dev/null || echo "")
 
-    if echo "$line" | grep -qi "Not enough data available yet"; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') vnstat 数据尚未准备好（接口：$MAIN_INTERFACE），暂按 0GB 处理。"
-        raw_bytes=0
-    elif [ -z "$line" ]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') vnstat 输出为空（接口：$MAIN_INTERFACE），暂按 0GB 处理。"
+    if [ -z "$line" ] || ! echo "$line" | grep -q ';'; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') vnstat 输出无效（接口：$MAIN_INTERFACE），暂按 0GB 处理。"
         raw_bytes=0
     else
+        # ✅ 关键修正：使用 all-time 字段 13/14/15（与 trafficcop.sh 一致）
         case "$TRAFFIC_MODE" in
             out)
-                raw_bytes=$(echo "$line" | cut -d';' -f10)
+                raw_bytes=$(echo "$line" | cut -d';' -f14)
                 ;;
             in)
-                raw_bytes=$(echo "$line" | cut -d';' -f9)
+                raw_bytes=$(echo "$line" | cut -d';' -f13)
                 ;;
             total)
-                raw_bytes=$(echo "$line" | cut -d';' -f11)
+                raw_bytes=$(echo "$line" | cut -d';' -f15)
                 ;;
             max)
-                rx=$(echo "$line" | cut -d';' -f9)
-                tx=$(echo "$line" | cut -d';' -f10)
-                rx=${rx:-0}
-                tx=${tx:-0}
+                rx=$(echo "$line" | cut -d';' -f13)
+                tx=$(echo "$line" | cut -d';' -f14)
+                rx=${rx:-0}; tx=${tx:-0}
                 [[ "$rx" =~ ^[0-9]+$ ]] || rx=0
                 [[ "$tx" =~ ^[0-9]+$ ]] || tx=0
-                if [ "$rx" -gt "$tx" ] 2>/dev/null; then
-                    raw_bytes="$rx"
-                else
-                    raw_bytes="$tx"
-                fi
+                raw_bytes=$((rx > tx ? rx : tx))
                 ;;
             *)
                 raw_bytes=0
@@ -297,9 +309,11 @@ Traffic_all() {
     [ "$real_bytes" -lt 0 ] && real_bytes=0
 
     local usage_gb
-    usage_gb=$(echo "scale=3; $real_bytes/1024/1024/1024" | bc 2>/dev/null || echo 0)
+    usage_gb=$(echo "scale=3; $real_bytes/1024/1024/1024" | bc 2>/dev/null)
+    usage_gb=${usage_gb:-0}
 
-    # 计算当前周期起始日期（简化版，与 trafficcop 的 get_period_start_date 逻辑一致）
+    # 周期起始日期（建议与你的 trafficcop.sh 的新版 get_period_start_date 一致；
+    # 这里保留你原来的简化逻辑，若你想完全一致我也可以给你一份“同款函数”）
     local y m d period_start
     y=$(date +%Y)
     m=$(date +%m)
@@ -341,9 +355,8 @@ Traffic_all() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') 当前周期: ${period_start} 起（按 $TRAFFIC_PERIOD 统计）"
     echo "$(date '+%Y-%m-%d %H:%M:%S') 统计模式: $TRAFFIC_MODE"
     echo "$(date '+%Y-%m-%d %H:%M:%S') 当前流量使用: $usage_gb GB"
-    echo "$(date '+%Y-%m-%d %H:%M:%S') 测试记录: vnstat 数据库路径 /var/lib/vnstat/$MAIN_INTERFACE (检查文件修改时间以验证更新)"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') DEBUG: raw_bytes(all-time)=$raw_bytes offset=$offset real_bytes=$real_bytes iface=$MAIN_INTERFACE"
 }
-
 
 # ======================================================
 # 手动设置已用流量（管理脚本版本）
