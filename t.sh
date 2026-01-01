@@ -237,7 +237,7 @@ update_all_scripts() {
 # - 读取 traffic_offset.dat
 # - vnstat --oneline b 使用 all-time：
 #   in=13 out=14 total=15
-# - 输出统一格式：printf "%.3f"
+# - 输出统一格式：0.000（始终三位小数）
 # ============================================
 Traffic_all() {
     local config_file="$WORK_DIR/traffic_config.txt"
@@ -256,21 +256,17 @@ Traffic_all() {
         return 1
     }
 
-    # 兜底
     TRAFFIC_MODE=${TRAFFIC_MODE:-total}
     TRAFFIC_PERIOD=${TRAFFIC_PERIOD:-monthly}
     PERIOD_START_DAY=${PERIOD_START_DAY:-1}
     MAIN_INTERFACE=${MAIN_INTERFACE:-eth0}
 
-    # OFFSET（没有就按 0）
     local offset
     offset=$(cat "$offset_file" 2>/dev/null || echo 0)
     [[ "$offset" =~ ^-?[0-9]+$ ]] || offset=0
 
-    # 强制刷新 vnstat 数据库，避免读到旧值
     vnstat -u -i "$MAIN_INTERFACE" >/dev/null 2>&1
 
-    # 读取 vnstat oneline
     local line raw_bytes rx tx
     line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>/dev/null || echo "")
 
@@ -278,17 +274,10 @@ Traffic_all() {
         echo "$(date '+%Y-%m-%d %H:%M:%S') vnstat 输出无效（接口：$MAIN_INTERFACE），暂按 0GB 处理。"
         raw_bytes=0
     else
-        # ✅ 使用 all-time 字段 13/14/15（与 trafficcop.sh 一致）
         case "$TRAFFIC_MODE" in
-            out)
-                raw_bytes=$(echo "$line" | cut -d';' -f14)
-                ;;
-            in)
-                raw_bytes=$(echo "$line" | cut -d';' -f13)
-                ;;
-            total)
-                raw_bytes=$(echo "$line" | cut -d';' -f15)
-                ;;
+            out)   raw_bytes=$(echo "$line" | cut -d';' -f14) ;;
+            in)    raw_bytes=$(echo "$line" | cut -d';' -f13) ;;
+            total) raw_bytes=$(echo "$line" | cut -d';' -f15) ;;
             max)
                 rx=$(echo "$line" | cut -d';' -f13)
                 tx=$(echo "$line" | cut -d';' -f14)
@@ -297,9 +286,7 @@ Traffic_all() {
                 [[ "$tx" =~ ^[0-9]+$ ]] || tx=0
                 raw_bytes=$((rx > tx ? rx : tx))
                 ;;
-            *)
-                raw_bytes=0
-                ;;
+            *) raw_bytes=0 ;;
         esac
     fi
 
@@ -308,16 +295,17 @@ Traffic_all() {
     local real_bytes=$((raw_bytes - offset))
     [ "$real_bytes" -lt 0 ] && real_bytes=0
 
-    # ✅ 统一格式：始终输出 3 位小数（0.000 / 12.340 / 123.456）
+    # ✅ 统一格式：始终输出 3 位小数
     local usage_gb
     usage_gb=$(echo "$real_bytes/1024/1024/1024" | bc -l 2>/dev/null)
     usage_gb=$(printf "%.3f" "${usage_gb:-0}")
 
-    # 周期起始日期（简化版）
+    # ✅ 再兜底一次：防止出现 ".355"
+    [[ "$usage_gb" == .* ]] && usage_gb="0$usage_gb"
+
+    # 周期起始（简化版）
     local y m d period_start
-    y=$(date +%Y)
-    m=$(date +%m)
-    d=$(date +%d)
+    y=$(date +%Y); m=$(date +%m); d=$(date +%d)
     PERIOD_START_DAY=${PERIOD_START_DAY:-1}
 
     case "$TRAFFIC_PERIOD" in
@@ -347,9 +335,7 @@ Traffic_all() {
                 period_start=$(date -d "$y-01-$PERIOD_START_DAY" +%Y-%m-%d)
             fi
             ;;
-        *)
-            period_start=$(date -d "$y-$m-${PERIOD_START_DAY:-1}" +%Y-%m-%d)
-            ;;
+        *) period_start=$(date -d "$y-$m-${PERIOD_START_DAY:-1}" +%Y-%m-%d) ;;
     esac
 
     echo "$(date '+%Y-%m-%d %H:%M:%S') 当前周期: ${period_start} 起（按 $TRAFFIC_PERIOD 统计）"
@@ -357,6 +343,7 @@ Traffic_all() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') 当前流量使用: $usage_gb GB"
     echo "$(date '+%Y-%m-%d %H:%M:%S') DEBUG: raw_bytes(all-time)=$raw_bytes offset=$offset real_bytes=$real_bytes iface=$MAIN_INTERFACE"
 }
+
 
 # ======================================================
 # 手动设置已用流量（管理脚本版本）
