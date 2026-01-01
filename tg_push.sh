@@ -2,7 +2,7 @@
 # ============================================
 # Telegram 流量监控通知脚本（pushplus 同款 cron 实现）
 # 文件名：/root/TrafficCop/tg_push.sh
-# 版本：best-2025-12-18 (cron aligned with pushplus.sh)
+# 版本：best-2026-01-01 (aligned with TrafficCop all-time fields)
 # ============================================
 
 export TZ='Asia/Shanghai'
@@ -23,7 +23,10 @@ PURPLE="\033[35m"; CYAN="\033[36m"; WHITE="\033[37m"; PLAIN="\033[0m"
 
 cd "$WORK_DIR" || exit 1
 
-# ==================== 日志裁剪：只保留最近100行 ====================
+
+# ============================================
+# 日志裁剪：只保留最近 100 行
+# ============================================
 trim_cron_log() {
     local file="$CRON_LOG"
     local max_lines=100
@@ -37,6 +40,9 @@ trim_cron_log() {
     fi
 }
 
+# ============================================
+# 记录 cron 日志（并自动裁剪）
+# ============================================
 log_cron() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') : $*" | tee -a "$CRON_LOG" >/dev/null
     trim_cron_log
@@ -52,7 +58,9 @@ check_running() {
     fi
 }
 
-# ==================== 配置读取/保存 ====================
+# ============================================
+# 读取 Telegram 配置（tgpush_config.txt）
+# ============================================
 read_config() {
     [ ! -s "$CONFIG_FILE" ] && return 1
     # shellcheck disable=SC1090
@@ -61,6 +69,9 @@ read_config() {
     return 0
 }
 
+# ============================================
+# 写入 Telegram 配置（tgpush_config.txt）
+# ============================================
 write_config() {
     cat >"$CONFIG_FILE" <<EOF
 TG_BOT_TOKEN="$TG_BOT_TOKEN"
@@ -72,41 +83,73 @@ EOF
     log_cron "配置已保存到 $CONFIG_FILE"
 }
 
+# ============================================
+# 读取 TrafficCop 配置（traffic_config.txt，更鲁棒）
+# - 仅解析 KEY=VALUE 行
+# - 清理旧变量，避免残留污染
+# - 校验 MAIN_INTERFACE 是否存在
+# ============================================
 read_traffic_config() {
     [ ! -s "$TRAFFIC_CONFIG" ] && return 1
 
     # 清理旧值，避免残留污染
-    unset MAIN_INTERFACE TRAFFIC_MODE TRAFFIC_LIMIT TRAFFIC_TOLERANCE TRAFFIC_PERIOD PERIOD_START_DAY
+    unset MAIN_INTERFACE TRAFFIC_MODE TRAFFIC_LIMIT TRAFFIC_TOLERANCE TRAFFIC_PERIOD PERIOD_START_DAY LIMIT_SPEED LIMIT_MODE
 
     # 只读取 KEY=VALUE 行，忽略中文说明/空行/杂项
     # shellcheck disable=SC1090
     source <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$TRAFFIC_CONFIG" | sed 's/\r$//') 2>/dev/null || return 1
 
+    # 兜底默认值
+    TRAFFIC_MODE=${TRAFFIC_MODE:-total}
+    TRAFFIC_PERIOD=${TRAFFIC_PERIOD:-monthly}
+    TRAFFIC_LIMIT=${TRAFFIC_LIMIT:-0}
+    TRAFFIC_TOLERANCE=${TRAFFIC_TOLERANCE:-0}
+    PERIOD_START_DAY=${PERIOD_START_DAY:-1}
+    MAIN_INTERFACE=${MAIN_INTERFACE:-eth0}
+
     [[ -z "$MAIN_INTERFACE" || -z "$TRAFFIC_MODE" || -z "$TRAFFIC_LIMIT" || -z "$TRAFFIC_TOLERANCE" ]] && return 1
 
-    # 接口校验（避免后面 vnstat/tc 报一堆但你看不出来原因）
+    # 接口校验
     ip link show "$MAIN_INTERFACE" >/dev/null 2>&1 || return 1
 
     return 0
 }
 
-
-# ==================== 周期计算 ====================
+# ============================================
+# 获取当前周期开始日期
+# ============================================
 get_period_start_date() {
     local y m d
     y=$(date +%Y); m=$(date +%m); d=$(date +%d)
+    PERIOD_START_DAY=${PERIOD_START_DAY:-1}
+
     case $TRAFFIC_PERIOD in
         monthly)
-            [ "$d" -lt "$PERIOD_START_DAY" ] && date -d "$y-$m-$PERIOD_START_DAY -1 month" +%Y-%m-%d 2>/dev/null || date -d "$y-$m-$PERIOD_START_DAY" +%Y-%m-%d
+            if [ "$d" -lt "$PERIOD_START_DAY" ]; then
+                date -d "$y-$m-$PERIOD_START_DAY -1 month" +%Y-%m-%d 2>/dev/null || \
+                date -d "$y-$m-$PERIOD_START_DAY" +%Y-%m-%d
+            else
+                date -d "$y-$m-$PERIOD_START_DAY" +%Y-%m-%d 2>/dev/null
+            fi
             ;;
         quarterly)
             local qm
             qm=$(( ((10#$m-1)/3*3 +1) ))
             qm=$(printf "%02d" "$qm")
-            [ "$d" -lt "$PERIOD_START_DAY" ] && date -d "$y-$qm-$PERIOD_START_DAY -3 months" +%Y-%m-%d 2>/dev/null || date -d "$y-$qm-$PERIOD_START_DAY" +%Y-%m-%d
+            if [ "$d" -lt "$PERIOD_START_DAY" ]; then
+                date -d "$y-$qm-$PERIOD_START_DAY -3 months" +%Y-%m-%d 2>/dev/null || \
+                date -d "$y-$qm-$PERIOD_START_DAY" +%Y-%m-%d
+            else
+                date -d "$y-$qm-$PERIOD_START_DAY" +%Y-%m-%d 2>/dev/null
+            fi
             ;;
         yearly)
-            [ "$d" -lt "$PERIOD_START_DAY" ] && date -d "$((y-1))-01-$PERIOD_START_DAY" +%Y-%m-%d 2>/dev/null || date -d "$y-01-$PERIOD_START_DAY" +%Y-%m-%d
+            if [ "$d" -lt "$PERIOD_START_DAY" ]; then
+                date -d "$((y-1))-01-$PERIOD_START_DAY" +%Y-%m-%d 2>/dev/null || \
+                date -d "$y-01-$PERIOD_START_DAY" +%Y-%m-%d
+            else
+                date -d "$y-01-$PERIOD_START_DAY" +%Y-%m-%d 2>/dev/null
+            fi
             ;;
         *)
             date -d "$y-$m-${PERIOD_START_DAY:-1}" +%Y-%m-%d 2>/dev/null
@@ -114,6 +157,9 @@ get_period_start_date() {
     esac
 }
 
+# ============================================
+# 获取当前周期结束日期
+# ============================================
 get_period_end_date() {
     local start="$1"
     case "$TRAFFIC_PERIOD" in
@@ -124,7 +170,11 @@ get_period_end_date() {
     esac
 }
 
-# ==================== 流量读取（vnstat + offset） ====================
+# ============================================
+# 获取本周期已用流量（GB，3 位小数）
+# - vnstat --oneline b 使用 all-time：in=13 out=14 total=15
+# - usage = raw_all_time - offset
+# ============================================
 get_traffic_usage() {
     local offset raw=0 line rx tx real
 
@@ -138,7 +188,7 @@ get_traffic_usage() {
     [ -z "$line" ] && { printf "0.000"; return 0; }
     echo "$line" | grep -q ';' || { printf "0.000"; return 0; }
 
-    # 使用 all-time：in=13 out=14 total=15
+    # all-time：in=13 out=14 total=15
     case $TRAFFIC_MODE in
         out)   raw=$(echo "$line" | cut -d';' -f14) ;;
         in)    raw=$(echo "$line" | cut -d';' -f13) ;;
@@ -163,15 +213,17 @@ get_traffic_usage() {
     printf "%.3f" "$(echo "scale=6; $real/1024/1024/1024" | bc 2>/dev/null || echo 0)"
 }
 
-
-# ==================== Telegram 发送 ====================
+# ============================================
+# Telegram 发送消息
+# ============================================
 tg_send() {
     local text="$1"
+
     curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
         -d "chat_id=${TG_CHAT_ID}" \
         -d "text=${text}" \
         -d "parse_mode=HTML" \
-        -d "disable_web_page_preview=true" > /dev/null 2>&1
+        -d "disable_web_page_preview=true" >/dev/null 2>&1
 
     if [ $? -eq 0 ]; then
         log_cron "Telegram 推送成功"
@@ -180,14 +232,19 @@ tg_send() {
     fi
 }
 
+# ============================================
+# 发送测试消息
+# ============================================
 test_telegram() {
     tg_send "🖥️ <b>[${MACHINE_NAME}]</b> 测试消息\n\n这是一条测试消息，如果您收到此推送，说明 Telegram 配置正常！"
 }
 
-# ==================== 流量每日推送====================
+# ============================================
+# 发送每日报告（Telegram）
+# ============================================
 daily_report() {
     if ! read_traffic_config; then
-        log_cron "未找到 TrafficCop 配置（$TRAFFIC_CONFIG）"
+        log_cron "未找到/无法读取 TrafficCop 配置（$TRAFFIC_CONFIG）"
         return 1
     fi
 
@@ -213,18 +270,16 @@ daily_report() {
         remain_emoji="🟡"
     fi
 
-    # ===== 💾 硬盘使用情况（根分区 /）：只生成 “已用/总量 (百分比)” =====
+    # 硬盘使用情况（根分区 /）
     disk_used=$(df -hP / 2>/dev/null | awk 'NR==2{print $3}')
     disk_total=$(df -hP / 2>/dev/null | awk 'NR==2{print $2}')
     disk_pct=$(df -hP / 2>/dev/null | awk 'NR==2{print $5}')
-
     if [[ -n "$disk_used" && -n "$disk_total" && -n "$disk_pct" ]]; then
         disk_line="${disk_used}/${disk_total} (${disk_pct})"
     else
         disk_line="未知"
     fi
 
-    # ===== 组装消息（按你要求的最后一行格式）=====
     msg="🎯 <b>[${MACHINE_NAME}]</b> 流量统计
 
 🕒日期：${today}
@@ -237,9 +292,12 @@ ${remain_emoji}剩余：${diff_days}天
     tg_send "$msg"
 }
 
-# ==================== 终端打印实时流量 ====================
+# ============================================
+# 终端打印实时流量（交互菜单的“打印实时流量”）
+# ============================================
 get_current_traffic() {
     read_traffic_config || { echo "请先运行 trafficcop.sh 初始化"; return; }
+
     local usage start
     usage=$(get_traffic_usage)
     start=$(get_period_start_date)
@@ -250,13 +308,16 @@ get_current_traffic() {
     echo "机器名   : $MACHINE_NAME"
     echo "接口     : $MAIN_INTERFACE"
     echo "模式     : $TRAFFIC_MODE"
-    echo "周期起   : $start"
+    echo "周期     : ${start} 起（按 ${TRAFFIC_PERIOD} 统计）"
     echo "已用     : $usage GB"
     echo "套餐     : $TRAFFIC_LIMIT GB（容错 $TRAFFIC_TOLERANCE GB）"
     echo "========================================"
 }
 
-# ==================== 修正 offset ====================
+# ============================================
+# 手动修正 offset（使“本周期已用 ≈ 你输入的值”）
+# - 口径同 trafficcop.sh：all-time 字段 13/14/15
+# ============================================
 flow_setting() {
     echo "请输入本周期实际已用流量（GB）:"
     read -r real_gb
@@ -300,8 +361,9 @@ flow_setting() {
     echo "已修正 offset → $new_offset（当前显示 ≈${real_gb} GB）"
 }
 
-
-# ==================== 配置向导 ====================
+# ============================================
+# Telegram 配置向导（交互）
+# ============================================
 initial_config() {
     echo "======================================"
     echo "      修改 Telegram 配置"
@@ -359,7 +421,7 @@ initial_config() {
 }
 
 # ============================================
-# cron 定时任务（与 pushplus.sh 一致）
+# 设置 cron：每分钟执行一次（到点才发日报）
 # ============================================
 setup_cron() {
     local entry="* * * * * $SCRIPT_PATH -cron"
@@ -367,23 +429,25 @@ setup_cron() {
     log_cron "✅ Crontab 已更新：每分钟检查一次，按设定时间发送每日报告。"
 }
 
+# ============================================
+# 停止服务：移除 cron
+# ============================================
 stop_service() {
     crontab -l 2>/dev/null | grep -v "$SCRIPT_PATH -cron" | crontab -
     log_cron "Telegram 定时任务已移除"
     exit 0
 }
 
-# ==================== 主入口（cron 逻辑与 pushplus.sh 对齐） ====================
+# ============================================
+# 主入口（cron 逻辑与 pushplus.sh 对齐）
+# ============================================
 main() {
-    # 与 pushplus.sh 一致：pidof 防重复
     check_running
 
-    # 启动日志（并自动裁剪）
     echo "----------------------------------------------" | tee -a "$CRON_LOG" >/dev/null
     log_cron "启动 Telegram 通知脚本"
 
     if [[ "$*" == *"-cron"* ]]; then
-        # Cron 模式：每分钟跑一次，只在指定时间发日报
         if ! read_config; then
             log_cron "Telegram 配置不完整，跳过 cron 执行。"
             exit 1
@@ -394,7 +458,6 @@ main() {
         log_cron "cron 模式，当前时间: $current_time，设定报告时间: $DAILY_REPORT_TIME"
 
         if [ "$current_time" = "$DAILY_REPORT_TIME" ]; then
-            # 每天第一次命中时清空日志（与 pushplus.sh 一致）
             echo "$(date '+%Y-%m-%d %H:%M:%S') : 时间匹配，开始发送每日报告。" >"$CRON_LOG"
             daily_report
         else
@@ -404,7 +467,6 @@ main() {
         exit 0
     fi
 
-    # 非 cron：交互菜单模式
     read_config || echo "首次运行请先选择 4 配置 Telegram"
     setup_cron
 
