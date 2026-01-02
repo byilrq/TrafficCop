@@ -185,12 +185,8 @@ get_main_interface() {
 }
 
 # ============================================
-# 初始配置（交互）
-# ============================================
-# ============================================
-# 初始配置（交互）
-# - 支持手动输入“本周期已用 GB”
-# - 写入 OFFSET_FILE 后同步写入 LAST_PERIOD_RESET，避免新周期检测覆盖 offset
+# 初始配置（交互）- 修复版
+# 关键修复：vnstat oneline 解析更稳 + 自动 --add 兜底
 # ============================================
 initial_config() {
     MAIN_INTERFACE=$(get_main_interface)
@@ -266,6 +262,7 @@ initial_config() {
     if [ -z "$real_gb" ]; then
         echo 0 > "$OFFSET_FILE" || { echo "写入 OFFSET_FILE 失败：$OFFSET_FILE"; return 1; }
         log_info "初始化：OFFSET_FILE=0（本周期从 0GB 开始统计）"
+        log_info "初始化：LAST_PERIOD_RESET=$period_start（防止新周期检测覆盖 offset）"
         return 0
     fi
 
@@ -274,25 +271,41 @@ initial_config() {
         echo "输入格式不正确，已按 0GB 处理。"
         echo 0 > "$OFFSET_FILE" || { echo "写入 OFFSET_FILE 失败：$OFFSET_FILE"; return 1; }
         log_info "初始化：OFFSET_FILE=0（用户输入无效）"
+        log_info "初始化：LAST_PERIOD_RESET=$period_start（防止新周期检测覆盖 offset）"
         return 0
     fi
 
-    # 更新 vnstat DB
-    vnstat -u -i "$MAIN_INTERFACE" >/dev/null 2>&1
+    # ========= vnstat 读取 all-time 基线（修复版）=========
+    # 1) 尝试更新 DB
+    vnstat -u -i "$MAIN_INTERFACE" >/dev/null 2>&1 || true
 
-    local line raw_bytes rx tx real_bytes new_offset
-    line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>/dev/null || echo "")
+    local line_all line raw_bytes rx tx real_bytes new_offset
 
-    if [ -z "$line" ] || ! echo "$line" | grep -q ';'; then
+    # 2) 读取 oneline（保留 stderr，便于诊断），但只解析包含 ';' 的行
+    line_all=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>&1 || echo "")
+    line=$(printf "%s\n" "$line_all" | grep ';' | tail -n 1)
+
+    # 3) 若没拿到 oneline，尝试自动把接口加入 vnstat 数据库（vnStat 2.10 支持 --add）
+    if [ -z "$line" ]; then
+        vnstat --add -i "$MAIN_INTERFACE" >/dev/null 2>&1 || true
+        vnstat -u -i "$MAIN_INTERFACE" >/dev/null 2>&1 || true
+
+        line_all=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>&1 || echo "")
+        line=$(printf "%s\n" "$line_all" | grep ';' | tail -n 1)
+    fi
+
+    # 4) 仍然无效：回退 offset=0，并记录原始输出
+    if [ -z "$line" ]; then
         echo "vnstat 输出无效，已将 OFFSET_FILE 设置为 0。"
         echo 0 > "$OFFSET_FILE" || { echo "写入 OFFSET_FILE 失败：$OFFSET_FILE"; return 1; }
-        log_info "初始化：vnstat 输出无效，OFFSET_FILE=0"
+        log_info "初始化：vnstat 无有效 oneline，OFFSET_FILE=0；原始输出：$line_all"
+        log_info "初始化：LAST_PERIOD_RESET=$period_start（防止新周期检测覆盖 offset）"
         return 0
     fi
 
     # all-time 字段：in=13 out=14 total=15
     raw_bytes=0
-    case $TRAFFIC_MODE in
+    case "$TRAFFIC_MODE" in
         out)   raw_bytes=$(echo "$line" | cut -d';' -f14) ;;
         in)    raw_bytes=$(echo "$line" | cut -d';' -f13) ;;
         total) raw_bytes=$(echo "$line" | cut -d';' -f15) ;;
@@ -310,7 +323,8 @@ initial_config() {
     raw_bytes=${raw_bytes:-0}
     [[ "$raw_bytes" =~ ^[0-9]+$ ]] || raw_bytes=0
 
-    real_bytes=$(echo "$real_gb * 1024 * 1024 * 1024" | bc | cut -d'.' -f1)
+    # real_gb -> bytes（1024^3）
+    real_bytes=$(echo "$real_gb * 1024 * 1024 * 1024" | bc 2>/dev/null | cut -d'.' -f1)
     real_bytes=${real_bytes:-0}
     [[ "$real_bytes" =~ ^[0-9]+$ ]] || real_bytes=0
 
@@ -318,7 +332,8 @@ initial_config() {
 
     echo "$new_offset" > "$OFFSET_FILE" || { echo "写入 OFFSET_FILE 失败：$OFFSET_FILE"; return 1; }
 
-    log_info "初始化：OFFSET_FILE=$new_offset（对应本周期已用 $real_gb GB）"
+    log_info "初始化：vnstat oneline 数据行：$line"
+    log_info "初始化：raw_bytes(all-time)=$raw_bytes bytes；real_bytes=$real_bytes bytes；OFFSET_FILE=$new_offset（对应本周期已用 $real_gb GB）"
     log_info "初始化：LAST_PERIOD_RESET=$period_start（防止新周期检测覆盖 offset）"
     return 0
 }
