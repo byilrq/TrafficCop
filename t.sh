@@ -677,6 +677,7 @@ show_main_menu() {
     echo -e "${YELLOW}7) 补偿流量${NC}" 
     echo -e "${RED}8) 停止服务${NC}"
     echo -e "${BLUE}9) 更新脚本${NC}"
+    echo -e "${BLUE}10) 域名禁止设置${NC}"
     echo -e "${YELLOW}0) 退出${NC}"
     echo -e "${PURPLE}====================================${NC}"
     echo ""
@@ -719,7 +720,9 @@ main() {
             9)
                 update_all_scripts
                 ;;
-
+            10)
+                ip_ban
+                ;;
             0)
                 echo -e "${GREEN}感谢使用TrafficCop管理工具！${NC}"
                 exit 0
