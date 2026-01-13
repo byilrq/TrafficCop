@@ -501,7 +501,6 @@ ip_ban() {
     echo "# reject(suffix:example.com) matches example.com and all subdomains" >> "$BAN_ACL"
     echo >> "$BAN_ACL"
 
-    # 每行一个域名 -> reject(suffix:domain)
     grep -vE '^\s*($|#)' "$BAN_LIST" | while read -r raw; do
       local d="$(_normalize_domain "$raw")"
       [[ -n "$d" ]] || continue
@@ -514,14 +513,10 @@ ip_ban() {
   }
 
   _remove_top_level_block() {
-    # 从 YAML 中移除顶层 key 块（如 acl: / sniff:），直到下一个顶层 key
-    # 用法：_remove_top_level_block "acl" < input > output
     local key="$1"
     awk -v key="$key" '
       BEGIN {skip=0}
-      # 命中顶层 key:
       $0 ~ ("^" key ":[[:space:]]*$") {skip=1; next}
-      # 若正在 skip，遇到下一个顶层 key 结束 skip
       skip==1 && $0 ~ "^[A-Za-z0-9_.-]+:[[:space:]]*.*$" {skip=0}
       skip==1 {next}
       {print}
@@ -533,17 +528,16 @@ ip_ban() {
     _backup_config
     _write_acl_file
 
-    # 先移除顶层 acl/sniff 块，确保最终只有一个生效
+    # 关键修复：trap 中不要引用 local 变量（避免 set -u 下 unbound variable）
     local tmp
     tmp="$(mktemp)"
-    trap 'rm -f "$tmp"' RETURN
+    trap "rm -f '$tmp'" RETURN
 
     cat "$HY_CONFIG" \
       | _remove_top_level_block "acl" \
       | _remove_top_level_block "sniff" \
       > "$tmp"
 
-    # 追加托管块（始终生效）
     {
       echo
       echo "# ===== ip_ban managed block (BEGIN) ====="
@@ -562,7 +556,6 @@ ip_ban() {
   }
 
   _restart_hysteria() {
-    # 优先 systemd
     if command -v systemctl >/dev/null 2>&1; then
       local s
       for s in "${SERVICE_CANDIDATES[@]}"; do
@@ -574,17 +567,15 @@ ip_ban() {
       done
     fi
 
-    # 无 systemd 服务：尽力用“当前进程命令行”重启（仅当它看起来是独立进程，ppid=1）
-    local pid
-    pid="$(ps -eo pid,ppid,args | awk '/[h]ysteria/ && /server/ {print $1, $2; exit}' || true)"
-    if [[ -n "$pid" ]]; then
-      local p ppid
-      p="$(echo "$pid" | awk '{print $1}')"
-      ppid="$(echo "$pid" | awk '{print $2}')"
-
+    # 无 systemd 服务：仅当 hysteria server 是独立进程（ppid=1）才尝试用原命令行重启
+    local line
+    line="$(ps -eo pid,ppid,args | awk '/[h]ysteria/ && /server/ {print; exit}' || true)"
+    if [[ -n "$line" ]]; then
+      local p ppid cmd
+      p="$(echo "$line" | awk '{print $1}')"
+      ppid="$(echo "$line" | awk '{print $2}')"
+      cmd="$(echo "$line" | cut -d' ' -f3-)"
       if [[ "$ppid" == "1" ]]; then
-        local cmd
-        cmd="$(ps -p "$p" -o args=)"
         echo "[ip_ban] 检测到 hysteria server 进程：PID=$p（ppid=1），尝试重启。"
         kill -TERM "$p" || true
         sleep 1
@@ -666,6 +657,7 @@ ip_ban() {
     esac
   done
 }
+
 
 
 # ======================================================
