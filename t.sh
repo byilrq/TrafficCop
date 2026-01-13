@@ -460,8 +460,176 @@ flow_setting() {
 
     return 0
 }
+# ======================================================
+# IP 域名禁止访问功能
+# ======================================================
+ip_ban() {
+  set -euo pipefail
 
+  # ===== 可按需调整 =====
+  local LIST_DIR="/etc/xray"
+  local BAN_LIST="${LIST_DIR}/banned_domains.txt"
+  local RULE_TAG="ip_ban_block_domains"
+  local BLOCK_OUT_TAG="block"
+  # Xray 配置路径：按常见路径自动探测
+  local XRAY_CONFIG="${XRAY_CONFIG:-}"
+  # =====================
 
+  _need_root() { [[ "${EUID}" -eq 0 ]] || { echo "[ip_ban] 需要 root 执行"; return 1; }; }
+  _need_cmd()  { command -v "$1" >/dev/null 2>&1 || { echo "[ip_ban] 缺少命令：$1"; return 1; }; }
+
+  _normalize_domain() {
+    local d="$1"
+    d="${d#http://}"; d="${d#https://}"
+    d="${d%%/*}"; d="${d%%:*}"
+    d="$(echo "$d" | tr -d '[:space:]')"
+    echo "$d"
+  }
+
+  _detect_config() {
+    if [[ -n "$XRAY_CONFIG" && -f "$XRAY_CONFIG" ]]; then return 0; fi
+    for p in /usr/local/etc/xray/config.json /etc/xray/config.json /etc/xray/xray.json; do
+      if [[ -f "$p" ]]; then XRAY_CONFIG="$p"; return 0; fi
+    done
+    echo "[ip_ban] 未找到 Xray config.json。请设置环境变量 XRAY_CONFIG=/path/to/config.json" >&2
+    return 1
+  }
+
+  _ensure_list_file() {
+    mkdir -p "$LIST_DIR"
+    touch "$BAN_LIST"
+  }
+
+  _restart_xray() {
+    if command -v systemctl >/dev/null 2>&1; then
+      systemctl restart xray 2>/dev/null || systemctl restart xray.service
+    else
+      service xray restart
+    fi
+  }
+
+  _apply_to_xray_config() {
+    _need_cmd jq
+    _detect_config
+    _ensure_list_file
+
+    # 生成 domain 列表：["domain:example.com", ...]
+    local domains_json
+    domains_json="$(grep -vE '^\s*($|#)' "$BAN_LIST" \
+      | sed 's/[[:space:]]//g' \
+      | awk 'NF{print "domain:"$0}' \
+      | jq -R . | jq -s 'unique')"
+
+    # 备份
+    cp -a "$XRAY_CONFIG" "${XRAY_CONFIG}.bak.$(date +%Y%m%d%H%M%S)"
+
+    # 更新配置：
+    # 1) 确保存在 blackhole outbound tag=block
+    # 2) 确保 routing.rules 中存在我们这条规则（放在最前，优先匹配）
+    # 3) 确保 inbounds 开启 sniffing（用于识别 SNI/Host；否则“按域名”无法可靠生效）
+    jq \
+      --arg rt "$RULE_TAG" \
+      --arg bot "$BLOCK_OUT_TAG" \
+      --argjson domains "$domains_json" \
+      '
+      .outbounds = (.outbounds // []) |
+      (if ([.outbounds[]? | select(.tag==$bot)] | length) == 0
+       then .outbounds += [{"protocol":"blackhole","tag":$bot}]
+       else .
+       end) |
+
+      .routing = (.routing // {}) |
+      .routing.rules = (.routing.rules // []) |
+
+      # 删除旧同名 ruleTag，再插入新规则到最前
+      .routing.rules = ([.routing.rules[]? | select((.ruleTag // "") != $rt)]
+                        | [{"type":"field","ruleTag":$rt,"domain":$domains,"outboundTag":$bot}] + .) |
+
+      # 尽量确保 sniffing 打开（对按域名生效很关键）
+      .inbounds = (.inbounds // []) |
+      .inbounds |= (map(
+        .sniffing = (.sniffing // {}) |
+        .sniffing.enabled = true |
+        .sniffing.destOverride = ((.sniffing.destOverride // []) + ["http","tls"] | unique)
+      ))
+      ' "$XRAY_CONFIG" > "${XRAY_CONFIG}.tmp"
+
+    mv "${XRAY_CONFIG}.tmp" "$XRAY_CONFIG"
+
+    # 如果封禁列表为空，也保留规则（domain=[] 时相当于不拦截）
+    _restart_xray
+
+    echo "[ip_ban] 已更新 Xray 配置并重启。配置文件：$XRAY_CONFIG"
+    echo "[ip_ban] 封禁列表：$BAN_LIST"
+  }
+
+  _add_domains() {
+    _ensure_list_file
+    local input="$1"
+    input="$(echo "$input" | tr ',' ' ')"
+    local added=0
+    for x in $input; do
+      local d="$(_normalize_domain "$x")"
+      [[ -n "$d" ]] || continue
+      if ! grep -qxF "$d" "$BAN_LIST" 2>/dev/null; then
+        echo "$d" >> "$BAN_LIST"
+        added=$((added+1))
+      fi
+    done
+    echo "[ip_ban] 已添加 $added 个域名到封禁列表。"
+    _apply_to_xray_config
+  }
+
+  _remove_domains() {
+    _ensure_list_file
+    local input="$1"
+    input="$(echo "$input" | tr ',' ' ')"
+    local removed=0
+    for x in $input; do
+      local d="$(_normalize_domain "$x")"
+      [[ -n "$d" ]] || continue
+      if grep -qxF "$d" "$BAN_LIST" 2>/dev/null; then
+        sed -i "\#^${d}\$#d" "$BAN_LIST"
+        removed=$((removed+1))
+      fi
+    done
+    echo "[ip_ban] 已撤销 $removed 个域名的封禁。"
+    _apply_to_xray_config
+  }
+
+  _need_root || return 1
+
+  # ===== 菜单（你要求的两项）=====
+  while true; do
+    echo
+    echo "================= Xray 域名访问控制（ip_ban） ================="
+    echo "1) 设置域名禁止访问"
+    echo "2) 撤销禁止访问"
+    echo "0) 退出"
+    echo "==============================================================="
+    read -r -p "请选择 [0-2]: " choice
+
+    case "${choice:-}" in
+      1)
+        read -r -p "输入要禁止访问的域名（空格或逗号分隔）: " domains
+        [[ -n "${domains// /}" ]] || { echo "[ip_ban] 未输入域名。"; continue; }
+        _add_domains "$domains"
+        ;;
+      2)
+        read -r -p "输入要撤销的域名（空格或逗号分隔）: " domains
+        [[ -n "${domains// /}" ]] || { echo "[ip_ban] 未输入域名。"; continue; }
+        _remove_domains "$domains"
+        ;;
+      0)
+        echo "[ip_ban] 已退出。"
+        break
+        ;;
+      *)
+        echo "[ip_ban] 无效选项：$choice"
+        ;;
+    esac
+  done
+}
 
 # ======================================================
 # 安装 / 管理 node 监控通知
