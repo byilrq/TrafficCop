@@ -466,17 +466,20 @@ flow_setting() {
 ip_ban() {
   set -euo pipefail
 
-  # ===== 可按需调整 =====
-  local LIST_DIR="/etc/xray"
-  local BAN_LIST="${LIST_DIR}/banned_domains.txt"
-  local RULE_TAG="ip_ban_block_domains"
-  local BLOCK_OUT_TAG="block"
-  # Xray 配置路径：按常见路径自动探测
-  local XRAY_CONFIG="${XRAY_CONFIG:-}"
-  # =====================
+  # ===== 固定为你的配置路径 =====
+  local HY_CONFIG="/etc/hysteria/config.yaml"
 
-  _need_root() { [[ "${EUID}" -eq 0 ]] || { echo "[ip_ban] 需要 root 执行"; return 1; }; }
-  _need_cmd()  { command -v "$1" >/dev/null 2>&1 || { echo "[ip_ban] 缺少命令：$1"; return 1; }; }
+  # ===== 管理文件 =====
+  local BAN_DIR="/etc/hysteria"
+  local BAN_LIST="${BAN_DIR}/banned_domains.txt"
+  local BAN_ACL="${BAN_DIR}/ip_ban.acl"
+
+  # ===== Hysteria 服务名候选（如你是 systemd 启动）=====
+  local SERVICE_CANDIDATES=("hysteria" "hysteria-server" "hysteria2" "hy2")
+
+  _need_root() {
+    [[ "${EUID}" -eq 0 ]] || { echo "[ip_ban] 需要 root 执行"; return 1; }
+  }
 
   _normalize_domain() {
     local d="$1"
@@ -486,85 +489,117 @@ ip_ban() {
     echo "$d"
   }
 
-  _detect_config() {
-    if [[ -n "$XRAY_CONFIG" && -f "$XRAY_CONFIG" ]]; then return 0; fi
-    for p in /usr/local/etc/xray/config.json /etc/xray/config.json /etc/xray/xray.json; do
-      if [[ -f "$p" ]]; then XRAY_CONFIG="$p"; return 0; fi
-    done
-    echo "[ip_ban] 未找到 Xray config.json。请设置环境变量 XRAY_CONFIG=/path/to/config.json" >&2
-    return 1
-  }
-
-  _ensure_list_file() {
-    mkdir -p "$LIST_DIR"
+  _ensure_files() {
+    mkdir -p "$BAN_DIR"
     touch "$BAN_LIST"
+    [[ -f "$HY_CONFIG" ]] || { echo "[ip_ban] 未找到配置文件：$HY_CONFIG"; return 1; }
   }
 
-  _restart_xray() {
+  _write_acl_file() {
+    : > "$BAN_ACL"
+    echo "# Managed by ip_ban() - Hysteria ACL" >> "$BAN_ACL"
+    echo "# reject(suffix:example.com) matches example.com and all subdomains" >> "$BAN_ACL"
+    echo >> "$BAN_ACL"
+
+    # 每行一个域名 -> reject(suffix:domain)
+    grep -vE '^\s*($|#)' "$BAN_LIST" | while read -r raw; do
+      local d="$(_normalize_domain "$raw")"
+      [[ -n "$d" ]] || continue
+      echo "reject(suffix:${d})" >> "$BAN_ACL"
+    done
+  }
+
+  _backup_config() {
+    cp -a "$HY_CONFIG" "${HY_CONFIG}.bak.$(date +%Y%m%d%H%M%S)"
+  }
+
+  _remove_top_level_block() {
+    # 从 YAML 中移除顶层 key 块（如 acl: / sniff:），直到下一个顶层 key
+    # 用法：_remove_top_level_block "acl" < input > output
+    local key="$1"
+    awk -v key="$key" '
+      BEGIN {skip=0}
+      # 命中顶层 key:
+      $0 ~ ("^" key ":[[:space:]]*$") {skip=1; next}
+      # 若正在 skip，遇到下一个顶层 key 结束 skip
+      skip==1 && $0 ~ "^[A-Za-z0-9_.-]+:[[:space:]]*.*$" {skip=0}
+      skip==1 {next}
+      {print}
+    '
+  }
+
+  _patch_config() {
+    _ensure_files
+    _backup_config
+    _write_acl_file
+
+    # 先移除顶层 acl/sniff 块，确保最终只有一个生效
+    local tmp
+    tmp="$(mktemp)"
+    trap 'rm -f "$tmp"' RETURN
+
+    cat "$HY_CONFIG" \
+      | _remove_top_level_block "acl" \
+      | _remove_top_level_block "sniff" \
+      > "$tmp"
+
+    # 追加托管块（始终生效）
+    {
+      echo
+      echo "# ===== ip_ban managed block (BEGIN) ====="
+      echo "acl:"
+      echo "  file: ${BAN_ACL}"
+      echo
+      echo "sniff:"
+      echo "  enable: true"
+      echo "# ===== ip_ban managed block (END) ====="
+    } >> "$tmp"
+
+    mv "$tmp" "$HY_CONFIG"
+    echo "[ip_ban] 已更新：$HY_CONFIG"
+    echo "[ip_ban] ACL 文件：$BAN_ACL"
+    echo "[ip_ban] 域名列表：$BAN_LIST"
+  }
+
+  _restart_hysteria() {
+    # 优先 systemd
     if command -v systemctl >/dev/null 2>&1; then
-      systemctl restart xray 2>/dev/null || systemctl restart xray.service
-    else
-      service xray restart
+      local s
+      for s in "${SERVICE_CANDIDATES[@]}"; do
+        if systemctl list-units --type=service --all | grep -qE "^${s}\.service"; then
+          systemctl restart "${s}.service"
+          echo "[ip_ban] 已重启：${s}.service"
+          return 0
+        fi
+      done
     fi
-  }
 
-  _apply_to_xray_config() {
-    _need_cmd jq
-    _detect_config
-    _ensure_list_file
+    # 无 systemd 服务：尽力用“当前进程命令行”重启（仅当它看起来是独立进程，ppid=1）
+    local pid
+    pid="$(ps -eo pid,ppid,args | awk '/[h]ysteria/ && /server/ {print $1, $2; exit}' || true)"
+    if [[ -n "$pid" ]]; then
+      local p ppid
+      p="$(echo "$pid" | awk '{print $1}')"
+      ppid="$(echo "$pid" | awk '{print $2}')"
 
-    # 生成 domain 列表：["domain:example.com", ...]
-    local domains_json
-    domains_json="$(grep -vE '^\s*($|#)' "$BAN_LIST" \
-      | sed 's/[[:space:]]//g' \
-      | awk 'NF{print "domain:"$0}' \
-      | jq -R . | jq -s 'unique')"
+      if [[ "$ppid" == "1" ]]; then
+        local cmd
+        cmd="$(ps -p "$p" -o args=)"
+        echo "[ip_ban] 检测到 hysteria server 进程：PID=$p（ppid=1），尝试重启。"
+        kill -TERM "$p" || true
+        sleep 1
+        nohup bash -lc "$cmd" >/var/log/hysteria_restart_by_ip_ban.log 2>&1 &
+        echo "[ip_ban] 已用原命令行重启（日志：/var/log/hysteria_restart_by_ip_ban.log）"
+        return 0
+      fi
+    fi
 
-    # 备份
-    cp -a "$XRAY_CONFIG" "${XRAY_CONFIG}.bak.$(date +%Y%m%d%H%M%S)"
-
-    # 更新配置：
-    # 1) 确保存在 blackhole outbound tag=block
-    # 2) 确保 routing.rules 中存在我们这条规则（放在最前，优先匹配）
-    # 3) 确保 inbounds 开启 sniffing（用于识别 SNI/Host；否则“按域名”无法可靠生效）
-    jq \
-      --arg rt "$RULE_TAG" \
-      --arg bot "$BLOCK_OUT_TAG" \
-      --argjson domains "$domains_json" \
-      '
-      .outbounds = (.outbounds // []) |
-      (if ([.outbounds[]? | select(.tag==$bot)] | length) == 0
-       then .outbounds += [{"protocol":"blackhole","tag":$bot}]
-       else .
-       end) |
-
-      .routing = (.routing // {}) |
-      .routing.rules = (.routing.rules // []) |
-
-      # 删除旧同名 ruleTag，再插入新规则到最前
-      .routing.rules = ([.routing.rules[]? | select((.ruleTag // "") != $rt)]
-                        | [{"type":"field","ruleTag":$rt,"domain":$domains,"outboundTag":$bot}] + .) |
-
-      # 尽量确保 sniffing 打开（对按域名生效很关键）
-      .inbounds = (.inbounds // []) |
-      .inbounds |= (map(
-        .sniffing = (.sniffing // {}) |
-        .sniffing.enabled = true |
-        .sniffing.destOverride = ((.sniffing.destOverride // []) + ["http","tls"] | unique)
-      ))
-      ' "$XRAY_CONFIG" > "${XRAY_CONFIG}.tmp"
-
-    mv "${XRAY_CONFIG}.tmp" "$XRAY_CONFIG"
-
-    # 如果封禁列表为空，也保留规则（domain=[] 时相当于不拦截）
-    _restart_xray
-
-    echo "[ip_ban] 已更新 Xray 配置并重启。配置文件：$XRAY_CONFIG"
-    echo "[ip_ban] 封禁列表：$BAN_LIST"
+    echo "[ip_ban] 未检测到 systemd 服务或可安全重启的独立进程。" >&2
+    echo "[ip_ban] 请用你实际的启动方式手动重启 hysteria，使配置生效。" >&2
+    return 0
   }
 
   _add_domains() {
-    _ensure_list_file
     local input="$1"
     input="$(echo "$input" | tr ',' ' ')"
     local added=0
@@ -576,12 +611,12 @@ ip_ban() {
         added=$((added+1))
       fi
     done
-    echo "[ip_ban] 已添加 $added 个域名到封禁列表。"
-    _apply_to_xray_config
+    echo "[ip_ban] 已添加 ${added} 个域名到封禁列表。"
+    _patch_config
+    _restart_hysteria
   }
 
-  _remove_domains() {
-    _ensure_list_file
+  _del_domains() {
     local input="$1"
     input="$(echo "$input" | tr ',' ' ')"
     local removed=0
@@ -593,20 +628,21 @@ ip_ban() {
         removed=$((removed+1))
       fi
     done
-    echo "[ip_ban] 已撤销 $removed 个域名的封禁。"
-    _apply_to_xray_config
+    echo "[ip_ban] 已撤销 ${removed} 个域名的封禁。"
+    _patch_config
+    _restart_hysteria
   }
 
   _need_root || return 1
+  _ensure_files || return 1
 
-  # ===== 菜单（你要求的两项）=====
   while true; do
     echo
-    echo "================= Xray 域名访问控制（ip_ban） ================="
+    echo "================= Hysteria 域名访问控制（ip_ban） ================="
     echo "1) 设置域名禁止访问"
     echo "2) 撤销禁止访问"
     echo "0) 退出"
-    echo "==============================================================="
+    echo "==================================================================="
     read -r -p "请选择 [0-2]: " choice
 
     case "${choice:-}" in
@@ -618,7 +654,7 @@ ip_ban() {
       2)
         read -r -p "输入要撤销的域名（空格或逗号分隔）: " domains
         [[ -n "${domains// /}" ]] || { echo "[ip_ban] 未输入域名。"; continue; }
-        _remove_domains "$domains"
+        _del_domains "$domains"
         ;;
       0)
         echo "[ip_ban] 已退出。"
@@ -630,6 +666,7 @@ ip_ban() {
     esac
   done
 }
+
 
 # ======================================================
 # 安装 / 管理 node 监控通知
