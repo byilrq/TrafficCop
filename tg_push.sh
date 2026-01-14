@@ -3,14 +3,19 @@
 # BWH + Telegram 流量监控通知脚本
 # 文件名：/root/TrafficCop/bwhpush.sh
 # 基于：tg_push.sh（增加 KiwiVM API 读取搬瓦工面板流量）
-# 版本：2026-01-14-r2
+# 版本：2026-01-14-final
 #
-# 变更点（相对你当前版本）：
-# 1) bwh_api 推送不再显示 “KiwiVM 口径/重置时间”
-# 2) 🔄周期始终沿用 TrafficCop 的周期格式：YYYY-MM-DD 到 YYYY-MM-DD
-#    （读取 /root/TrafficCop/traffic_config.txt 的 PERIOD_START_DAY/TRAFFIC_PERIOD）
-# 3) bwh_api 推送的“已用/套餐”使用 KiwiVM API 的 data_counter/plan_monthly_data
-# 4) bwh_api 实时查看同样保持上述周期格式
+# 支持两种流量来源：
+#   1) vnstat（本机网卡口径，支持 offset 校准）
+#   2) bwh_api（KiwiVM 面板口径，直接读取 data_counter）
+#
+# 本最终版变更点：
+# - bwh_api 推送/实时显示的 🔄周期 改为“面板重置周期”口径：
+#   根据 KiwiVM API 的 data_next_reset 推算：
+#     start = reset_date - 1 month
+#     end   = reset_date - 1 day
+#   输出示例：🔄周期：2025-12-17 到 2026-01-16
+# - 不在推送里展示“重置时间”行（仅用来推算周期）
 #
 # 依赖：curl / jq / bc / iproute2（vnstat 仅在 vnstat 模式需要）
 # ============================================
@@ -147,7 +152,7 @@ read_traffic_config() {
 }
 
 # ============================================
-# 获取当前周期开始日期（展示用）
+# 获取当前周期开始日期（TrafficCop 自定义口径；展示用兜底）
 # ============================================
 get_period_start_date() {
     local y m d
@@ -186,7 +191,7 @@ get_period_start_date() {
 }
 
 # ============================================
-# 获取当前周期结束日期（展示用）
+# 获取当前周期结束日期（TrafficCop 自定义口径；展示用兜底）
 # ============================================
 get_period_end_date() {
     local start="$1"
@@ -267,6 +272,26 @@ get_bwh_info() {
 }
 
 # ============================================
+# 根据 KiwiVM next_reset_ts 推算周期日期（仅显示日期）
+# 输入：next_reset_ts
+# 输出：start_date end_date（例：2025-12-17 2026-01-16）
+# ============================================
+get_bwh_cycle_dates() {
+    local next_reset_ts="$1"
+    [[ "$next_reset_ts" =~ ^[0-9]+$ ]] || return 1
+    (( next_reset_ts > 0 )) || return 1
+
+    local reset_date start_date end_date
+    reset_date=$(date -d @"$next_reset_ts" +%Y-%m-%d 2>/dev/null) || return 1
+
+    start_date=$(date -d "$reset_date -1 month" +%Y-%m-%d 2>/dev/null) || return 1
+    end_date=$(date -d "$reset_date -1 day" +%Y-%m-%d 2>/dev/null) || return 1
+
+    echo "$start_date $end_date"
+    return 0
+}
+
+# ============================================
 # Telegram 发送消息
 # ============================================
 tg_send() {
@@ -325,7 +350,7 @@ daily_report() {
         disk_line="未知"
     fi
 
-    # 统一读取 TrafficCop 配置，仅用于“周期展示”
+    # 周期兜底：TrafficCop 自定义口径
     local start end
     if read_traffic_config; then
         start=$(get_period_start_date)
@@ -336,15 +361,23 @@ daily_report() {
     fi
 
     if [[ "$TRAFFIC_SOURCE" == "bwh_api" ]]; then
-        local info used_gib plan_gib
+        local info used_gib plan_gib next_reset
         info=$(get_bwh_info) || {
             log_cron "BWH API 读取失败：请检查 VEID/API_KEY/网络/Endpoint"
             return 1
         }
+
         used_gib=$(echo "$info" | awk '{print $1}')
         plan_gib=$(echo "$info" | awk '{print $2}')
+        next_reset=$(echo "$info" | awk '{print $3}')
 
-        # 保持与你旧推送一致的格式：不显示重置周期/重置时间
+        # 优先：按面板 reset 周期推算
+        local cy
+        cy=$(get_bwh_cycle_dates "$next_reset" 2>/dev/null) && {
+            start=$(echo "$cy" | awk '{print $1}')
+            end=$(echo "$cy" | awk '{print $2}')
+        }
+
         msg="🎯 <b>[${MACHINE_NAME}]</b> 流量统计
 
 🕒日期：${today}
@@ -358,7 +391,7 @@ ${remain_emoji}剩余：${diff_days}天
         return 0
     fi
 
-    # vnstat 模式（沿用原逻辑）
+    # vnstat 模式
     if ! read_traffic_config; then
         log_cron "未找到/无法读取 TrafficCop 配置（$TRAFFIC_CONFIG）"
         return 1
@@ -384,7 +417,7 @@ ${remain_emoji}剩余：${diff_days}天
 # 终端打印实时流量
 # ============================================
 get_current_traffic() {
-    # 统一读取 TrafficCop 配置，仅用于“周期展示”
+    # 周期兜底：TrafficCop 自定义口径
     local start end
     if read_traffic_config; then
         start=$(get_period_start_date)
@@ -395,10 +428,18 @@ get_current_traffic() {
     fi
 
     if [[ "$TRAFFIC_SOURCE" == "bwh_api" ]]; then
-        local info used_gib plan_gib
+        local info used_gib plan_gib next_reset
         info=$(get_bwh_info) || { echo "BWH API 读取失败：请检查 VEID/API_KEY"; return 1; }
         used_gib=$(echo "$info" | awk '{print $1}')
         plan_gib=$(echo "$info" | awk '{print $2}')
+        next_reset=$(echo "$info" | awk '{print $3}')
+
+        # 优先：按面板 reset 周期推算
+        local cy
+        cy=$(get_bwh_cycle_dates "$next_reset" 2>/dev/null) && {
+            start=$(echo "$cy" | awk '{print $1}')
+            end=$(echo "$cy" | awk '{print $2}')
+        }
 
         echo "========================================"
         echo "       实时流量信息（KiwiVM API）"
@@ -474,7 +515,7 @@ flow_setting() {
 }
 
 # ============================================
-# 配置向导（交互）：含搬瓦工 API + 来源选择
+# 配置向导（交互）：第 4 项扩展为“Telegram + 搬瓦工 API + 来源选择”
 # ============================================
 initial_config() {
     echo "======================================"
