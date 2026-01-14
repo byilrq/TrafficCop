@@ -1,8 +1,15 @@
 #!/bin/bash
 # ============================================
-# Telegram 流量监控通知脚本（pushplus 同款 cron 实现）
-# 文件名：/root/TrafficCop/tg_push.sh
-# 版本：best-2026-01-01 (aligned with TrafficCop all-time fields)
+# BWH + Telegram 流量监控通知脚本
+# 文件名：/root/TrafficCop/bwhpush.sh
+# 基于：tg_push.sh（增加 KiwiVM API 读取搬瓦工面板流量）
+# 版本：2026-01-14
+#
+# 支持两种流量来源：
+#   1) vnstat（本机网卡口径，支持 offset 校准）
+#   2) bwh_api（KiwiVM 面板口径，直接读取 data_counter）
+#
+# 依赖：curl / jq / bc / iproute2（vnstat 仅在 vnstat 模式需要）
 # ============================================
 
 export TZ='Asia/Shanghai'
@@ -10,12 +17,15 @@ export TZ='Asia/Shanghai'
 WORK_DIR="/root/TrafficCop"
 mkdir -p "$WORK_DIR"
 
-CONFIG_FILE="$WORK_DIR/tgpush_config.txt"
-CRON_LOG="$WORK_DIR/tgpush_cron.log"
-SCRIPT_PATH="$WORK_DIR/tg_push.sh"
+CONFIG_FILE="$WORK_DIR/bwhpush_config.txt"
+CRON_LOG="$WORK_DIR/bwhpush_cron.log"
+SCRIPT_PATH="$WORK_DIR/bwhpush.sh"
 
 TRAFFIC_CONFIG="$WORK_DIR/traffic_config.txt"
 OFFSET_FILE="$WORK_DIR/traffic_offset.dat"
+
+# KiwiVM API Endpoint（一般不需要改）
+BWH_API_ENDPOINT_DEFAULT="https://api.64clouds.com/v1/getServiceInfo"
 
 # 颜色
 RED="\033[31m"; GREEN="\033[32m"; YELLOW="\033[33m"; BLUE="\033[34m"
@@ -25,11 +35,11 @@ cd "$WORK_DIR" || exit 1
 
 
 # ============================================
-# 日志裁剪：只保留最近 100 行
+# 日志裁剪：只保留最近 150 行
 # ============================================
 trim_cron_log() {
     local file="$CRON_LOG"
-    local max_lines=100
+    local max_lines=150
     [[ -f "$file" ]] || return 0
 
     local cnt
@@ -49,7 +59,7 @@ log_cron() {
 }
 
 # ============================================
-# 防止重复运行（与 pushplus.sh 一致：pidof）
+# 防止重复运行（pidof）
 # ============================================
 check_running() {
     if pidof -x "$(basename "$0")" -o $$ >/dev/null 2>&1; then
@@ -59,18 +69,31 @@ check_running() {
 }
 
 # ============================================
-# 读取 Telegram 配置（tgpush_config.txt）
+# 读取配置（bwhpush_config.txt）
+# 必填：TG_BOT_TOKEN TG_CHAT_ID MACHINE_NAME DAILY_REPORT_TIME EXPIRE_DATE
+# 可选：TRAFFIC_SOURCE(bwh_api/vnstat) BWH_VEID BWH_API_KEY BWH_API_ENDPOINT
 # ============================================
 read_config() {
     [ ! -s "$CONFIG_FILE" ] && return 1
     # shellcheck disable=SC1090
-    source "$CONFIG_FILE" 2>/dev/null
+    source "$CONFIG_FILE" 2>/dev/null || return 1
+
+    # 默认值
+    TRAFFIC_SOURCE=${TRAFFIC_SOURCE:-vnstat}
+    BWH_API_ENDPOINT=${BWH_API_ENDPOINT:-$BWH_API_ENDPOINT_DEFAULT}
+
     [[ -z "$TG_BOT_TOKEN" || -z "$TG_CHAT_ID" || -z "$MACHINE_NAME" || -z "$DAILY_REPORT_TIME" || -z "$EXPIRE_DATE" ]] && return 1
+
+    # 若选择 bwh_api，则要求 VEID/API_KEY
+    if [[ "$TRAFFIC_SOURCE" == "bwh_api" ]]; then
+        [[ -z "$BWH_VEID" || -z "$BWH_API_KEY" ]] && return 1
+    fi
+
     return 0
 }
 
 # ============================================
-# 写入 Telegram 配置（tgpush_config.txt）
+# 写入配置（bwhpush_config.txt）
 # ============================================
 write_config() {
     cat >"$CONFIG_FILE" <<EOF
@@ -79,27 +102,28 @@ TG_CHAT_ID="$TG_CHAT_ID"
 MACHINE_NAME="$MACHINE_NAME"
 DAILY_REPORT_TIME="$DAILY_REPORT_TIME"
 EXPIRE_DATE="$EXPIRE_DATE"
+
+# 流量来源：vnstat 或 bwh_api
+TRAFFIC_SOURCE="$TRAFFIC_SOURCE"
+
+# 搬瓦工 / KiwiVM API（仅 bwh_api 模式需要）
+BWH_VEID="$BWH_VEID"
+BWH_API_KEY="$BWH_API_KEY"
+BWH_API_ENDPOINT="$BWH_API_ENDPOINT"
 EOF
     log_cron "配置已保存到 $CONFIG_FILE"
 }
 
 # ============================================
-# 读取 TrafficCop 配置（traffic_config.txt，更鲁棒）
-# - 仅解析 KEY=VALUE 行
-# - 清理旧变量，避免残留污染
-# - 校验 MAIN_INTERFACE 是否存在
+# 读取 TrafficCop 配置（vnstat 模式使用）
 # ============================================
 read_traffic_config() {
     [ ! -s "$TRAFFIC_CONFIG" ] && return 1
 
-    # 清理旧值，避免残留污染
     unset MAIN_INTERFACE TRAFFIC_MODE TRAFFIC_LIMIT TRAFFIC_TOLERANCE TRAFFIC_PERIOD PERIOD_START_DAY LIMIT_SPEED LIMIT_MODE
-
-    # 只读取 KEY=VALUE 行，忽略中文说明/空行/杂项
     # shellcheck disable=SC1090
     source <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$TRAFFIC_CONFIG" | sed 's/\r$//') 2>/dev/null || return 1
 
-    # 兜底默认值
     TRAFFIC_MODE=${TRAFFIC_MODE:-total}
     TRAFFIC_PERIOD=${TRAFFIC_PERIOD:-monthly}
     TRAFFIC_LIMIT=${TRAFFIC_LIMIT:-0}
@@ -108,15 +132,13 @@ read_traffic_config() {
     MAIN_INTERFACE=${MAIN_INTERFACE:-eth0}
 
     [[ -z "$MAIN_INTERFACE" || -z "$TRAFFIC_MODE" || -z "$TRAFFIC_LIMIT" || -z "$TRAFFIC_TOLERANCE" ]] && return 1
-
-    # 接口校验
     ip link show "$MAIN_INTERFACE" >/dev/null 2>&1 || return 1
 
     return 0
 }
 
 # ============================================
-# 获取当前周期开始日期
+# 获取当前周期开始日期（vnstat 模式展示用）
 # ============================================
 get_period_start_date() {
     local y m d
@@ -126,8 +148,7 @@ get_period_start_date() {
     case $TRAFFIC_PERIOD in
         monthly)
             if [ "$d" -lt "$PERIOD_START_DAY" ]; then
-                date -d "$y-$m-$PERIOD_START_DAY -1 month" +%Y-%m-%d 2>/dev/null || \
-                date -d "$y-$m-$PERIOD_START_DAY" +%Y-%m-%d
+                date -d "$y-$m-$PERIOD_START_DAY -1 month" +%Y-%m-%d 2>/dev/null || date -d "$y-$m-$PERIOD_START_DAY" +%Y-%m-%d
             else
                 date -d "$y-$m-$PERIOD_START_DAY" +%Y-%m-%d 2>/dev/null
             fi
@@ -137,16 +158,14 @@ get_period_start_date() {
             qm=$(( ((10#$m-1)/3*3 +1) ))
             qm=$(printf "%02d" "$qm")
             if [ "$d" -lt "$PERIOD_START_DAY" ]; then
-                date -d "$y-$qm-$PERIOD_START_DAY -3 months" +%Y-%m-%d 2>/dev/null || \
-                date -d "$y-$qm-$PERIOD_START_DAY" +%Y-%m-%d
+                date -d "$y-$qm-$PERIOD_START_DAY -3 months" +%Y-%m-%d 2>/dev/null || date -d "$y-$qm-$PERIOD_START_DAY" +%Y-%m-%d
             else
                 date -d "$y-$qm-$PERIOD_START_DAY" +%Y-%m-%d 2>/dev/null
             fi
             ;;
         yearly)
             if [ "$d" -lt "$PERIOD_START_DAY" ]; then
-                date -d "$((y-1))-01-$PERIOD_START_DAY" +%Y-%m-%d 2>/dev/null || \
-                date -d "$y-01-$PERIOD_START_DAY" +%Y-%m-%d
+                date -d "$((y-1))-01-$PERIOD_START_DAY" +%Y-%m-%d 2>/dev/null || date -d "$y-01-$PERIOD_START_DAY" +%Y-%m-%d
             else
                 date -d "$y-01-$PERIOD_START_DAY" +%Y-%m-%d 2>/dev/null
             fi
@@ -158,7 +177,7 @@ get_period_start_date() {
 }
 
 # ============================================
-# 获取当前周期结束日期
+# 获取当前周期结束日期（vnstat 模式展示用）
 # ============================================
 get_period_end_date() {
     local start="$1"
@@ -171,31 +190,26 @@ get_period_end_date() {
 }
 
 # ============================================
-# 获取本周期已用流量（GB，3 位小数）
-# - vnstat --oneline b 使用 all-time：in=13 out=14 total=15
-# - usage = raw_all_time - offset
+# vnstat：本周期已用流量（GiB，3 位小数）
+# usage = raw_all_time - offset
 # ============================================
-get_traffic_usage() {
+get_traffic_usage_vnstat() {
     local offset raw=0 line rx tx real
 
     offset=$(cat "$OFFSET_FILE" 2>/dev/null || echo 0)
     [[ "$offset" =~ ^-?[0-9]+$ ]] || offset=0
 
-    # 强制更新 vnstat 数据库，避免读到旧值
     vnstat -u -i "$MAIN_INTERFACE" >/dev/null 2>&1
-
     line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>/dev/null || echo "")
     [ -z "$line" ] && { printf "0.000"; return 0; }
     echo "$line" | grep -q ';' || { printf "0.000"; return 0; }
 
-    # all-time：in=13 out=14 total=15
     case $TRAFFIC_MODE in
         out)   raw=$(echo "$line" | cut -d';' -f14) ;;
         in)    raw=$(echo "$line" | cut -d';' -f13) ;;
         total) raw=$(echo "$line" | cut -d';' -f15) ;;
         max)
-            rx=$(echo "$line" | cut -d';' -f13)
-            tx=$(echo "$line" | cut -d';' -f14)
+            rx=$(echo "$line" | cut -d';' -f13); tx=$(echo "$line" | cut -d';' -f14)
             rx=${rx:-0}; tx=${tx:-0}
             [[ "$rx" =~ ^[0-9]+$ ]] || rx=0
             [[ "$tx" =~ ^[0-9]+$ ]] || tx=0
@@ -211,6 +225,39 @@ get_traffic_usage() {
     (( real < 0 )) && real=0
 
     printf "%.3f" "$(echo "scale=6; $real/1024/1024/1024" | bc 2>/dev/null || echo 0)"
+}
+
+# ============================================
+# KiwiVM API：读取搬瓦工面板口径流量
+# 输出（通过 echo 写到 stdout，供调用者解析）：
+#   used_gib plan_gib next_reset_ts used_bytes plan_bytes
+# 失败返回：非 0
+# ============================================
+get_bwh_info() {
+    local json err used_bytes plan_bytes next_reset
+
+    json=$(curl -fsS -G "$BWH_API_ENDPOINT" \
+        --data-urlencode "veid=$BWH_VEID" \
+        --data-urlencode "api_key=$BWH_API_KEY" 2>/dev/null) || return 1
+
+    err=$(echo "$json" | jq -r '.error // 1' 2>/dev/null)
+    [[ "$err" == "0" ]] || return 1
+
+    used_bytes=$(echo "$json" | jq -r '.data_counter // empty' 2>/dev/null)
+    plan_bytes=$(echo "$json" | jq -r '.plan_monthly_data // empty' 2>/dev/null)
+    next_reset=$(echo "$json" | jq -r '.data_next_reset // empty' 2>/dev/null)
+
+    [[ "$used_bytes" =~ ^[0-9]+$ ]] || return 1
+    [[ "$plan_bytes" =~ ^[0-9]+$ ]] || plan_bytes=0
+    [[ "$next_reset" =~ ^[0-9]+$ ]] || next_reset=0
+
+    # GiB（1024^3）
+    local used_gib plan_gib
+    used_gib=$(awk "BEGIN{printf \"%.3f\", $used_bytes/1024/1024/1024}")
+    plan_gib=$(awk "BEGIN{printf \"%.3f\", $plan_bytes/1024/1024/1024}")
+
+    echo "$used_gib $plan_gib $next_reset $used_bytes $plan_bytes"
+    return 0
 }
 
 # ============================================
@@ -243,20 +290,12 @@ test_telegram() {
 # 发送每日报告（Telegram）
 # ============================================
 daily_report() {
-    if ! read_traffic_config; then
-        log_cron "未找到/无法读取 TrafficCop 配置（$TRAFFIC_CONFIG）"
-        return 1
-    fi
-
     local usage start end limit today expire_ts today_ts diff_days remain_emoji
     local disk_used disk_total disk_pct disk_line msg
 
-    usage=$(get_traffic_usage)
-    start=$(get_period_start_date)
-    end=$(get_period_end_date "$start")
-    limit="${TRAFFIC_LIMIT} GB"
-
     today=$(date +%Y-%m-%d)
+
+    # 到期剩余天数
     expire_ts=$(date -d "${EXPIRE_DATE//./-}" +%s 2>/dev/null)
     today_ts=$(date -d "$today" +%s 2>/dev/null)
     diff_days=$(( (expire_ts - today_ts) / 86400 ))
@@ -280,12 +319,59 @@ daily_report() {
         disk_line="未知"
     fi
 
-    msg="🎯 <b>[${MACHINE_NAME}]</b> 流量统计
+    if [[ "$TRAFFIC_SOURCE" == "bwh_api" ]]; then
+        local info used_gib plan_gib next_reset
+        info=$(get_bwh_info) || {
+            log_cron "BWH API 读取失败：请检查 VEID/API_KEY/网络/Endpoint"
+            return 1
+        }
+        used_gib=$(echo "$info" | awk '{print $1}')
+        plan_gib=$(echo "$info" | awk '{print $2}')
+        next_reset=$(echo "$info" | awk '{print $3}')
+
+        usage="$used_gib"
+        limit="${plan_gib} GiB"
+
+        # 面板重置时间（若有）
+        if [[ "$next_reset" =~ ^[0-9]+$ ]] && (( next_reset > 0 )); then
+            end=$(date -d @"$next_reset" "+%Y-%m-%d %H:%M:%S" 2>/dev/null)
+            start="KiwiVM 口径（按重置周期）"
+        else
+            end="未知"
+            start="KiwiVM 口径"
+        fi
+
+        msg="🎯 <b>[${MACHINE_NAME}]</b> 流量统计（KiwiVM API）
+
+🕒日期：${today}
+${remain_emoji}剩余：${diff_days}天
+🔄周期：${start}
+⏲重置：${end}
+⌛已用：${usage} GiB
+🌐套餐：${limit}
+💾空间：${disk_line}"
+
+        tg_send "$msg"
+        return 0
+    fi
+
+    # vnstat 模式
+    if ! read_traffic_config; then
+        log_cron "未找到/无法读取 TrafficCop 配置（$TRAFFIC_CONFIG）"
+        return 1
+    fi
+
+    usage=$(get_traffic_usage_vnstat)
+    start=$(get_period_start_date)
+    end=$(get_period_end_date "$start")
+    limit="${TRAFFIC_LIMIT} GB"
+
+    msg="🎯 <b>[${MACHINE_NAME}]</b> 流量统计（vnstat）
 
 🕒日期：${today}
 ${remain_emoji}剩余：${diff_days}天
 🔄周期：${start} 到 ${end}
-⌛已用：${usage} GB
+⌛已用：${usage} GiB
 🌐套餐：${limit}
 💾空间：${disk_line}"
 
@@ -293,38 +379,58 @@ ${remain_emoji}剩余：${diff_days}天
 }
 
 # ============================================
-# 终端打印实时流量（交互菜单的“打印实时流量”）
+# 终端打印实时流量
 # ============================================
 get_current_traffic() {
-    read_traffic_config || { echo "请先运行 trafficcop.sh 初始化"; return; }
+    if [[ "$TRAFFIC_SOURCE" == "bwh_api" ]]; then
+        local info used_gib plan_gib next_reset
+        info=$(get_bwh_info) || { echo "BWH API 读取失败：请检查 VEID/API_KEY"; return 1; }
+        used_gib=$(echo "$info" | awk '{print $1}')
+        plan_gib=$(echo "$info" | awk '{print $2}')
+        next_reset=$(echo "$info" | awk '{print $3}')
 
+        echo "========================================"
+        echo "       实时流量信息（KiwiVM API）"
+        echo "========================================"
+        echo "机器名   : $MACHINE_NAME"
+        echo "来源     : bwh_api"
+        echo "已用     : ${used_gib} GiB"
+        echo "套餐     : ${plan_gib} GiB"
+        if [[ "$next_reset" =~ ^[0-9]+$ ]] && (( next_reset > 0 )); then
+            echo "重置时间 : $(date -d @"$next_reset" "+%Y-%m-%d %H:%M:%S" 2>/dev/null)"
+        else
+            echo "重置时间 : 未知"
+        fi
+        echo "========================================"
+        return 0
+    fi
+
+    read_traffic_config || { echo "请先运行 trafficcop.sh 初始化（vnstat 模式需要）"; return 1; }
     local usage start
-    usage=$(get_traffic_usage)
+    usage=$(get_traffic_usage_vnstat)
     start=$(get_period_start_date)
 
     echo "========================================"
-    echo "       实时流量信息"
+    echo "       实时流量信息（vnstat）"
     echo "========================================"
     echo "机器名   : $MACHINE_NAME"
     echo "接口     : $MAIN_INTERFACE"
     echo "模式     : $TRAFFIC_MODE"
     echo "周期     : ${start} 起（按 ${TRAFFIC_PERIOD} 统计）"
-    echo "已用     : $usage GB"
+    echo "已用     : $usage GiB"
     echo "套餐     : $TRAFFIC_LIMIT GB（容错 $TRAFFIC_TOLERANCE GB）"
     echo "========================================"
 }
 
 # ============================================
-# 手动修正 offset（使“本周期已用 ≈ 你输入的值”）
-# - 口径同 trafficcop.sh：all-time 字段 13/14/15
+# vnstat 模式：手动修正 offset（保持原逻辑）
 # ============================================
 flow_setting() {
-    echo "请输入本周期实际已用流量（GB）:"
+    echo "（仅 vnstat 模式可用）请输入本周期实际已用流量（GiB）:"
     read -r real_gb
     [[ ! $real_gb =~ ^[0-9]+(\.[0-9]+)?$ ]] && { echo "输入无效"; return; }
     read_traffic_config || return
 
-    # 强制更新 vnstat 数据库
     vnstat -u -i "$MAIN_INTERFACE" >/dev/null 2>&1
 
     local line raw rx tx
@@ -332,7 +438,6 @@ flow_setting() {
     [ -z "$line" ] && { echo "vnstat 无输出"; return; }
     echo "$line" | grep -q ';' || { echo "vnstat 输出无效：$line"; return; }
 
-    # all-time：in=13 out=14 total=15
     case $TRAFFIC_MODE in
         out)   raw=$(echo "$line" | cut -d';' -f14) ;;
         in)    raw=$(echo "$line" | cut -d';' -f13) ;;
@@ -358,18 +463,19 @@ flow_setting() {
 
     local new_offset=$((raw - target_bytes))
     echo "$new_offset" > "$OFFSET_FILE"
-    echo "已修正 offset → $new_offset（当前显示 ≈${real_gb} GB）"
+    echo "已修正 offset → $new_offset（当前显示 ≈${real_gb} GiB）"
 }
 
 # ============================================
-# Telegram 配置向导（交互）
+# 配置向导（交互）：第 4 项扩展为“Telegram + 搬瓦工 API + 来源选择”
 # ============================================
 initial_config() {
     echo "======================================"
-    echo "      修改 Telegram 配置"
+    echo "   修改 Telegram + 搬瓦工(KiwiVM)配置"
     echo "======================================"
     echo
 
+    # 1) Telegram
     if [ -n "$TG_BOT_TOKEN" ]; then
         local tshow="${TG_BOT_TOKEN:0:8}...${TG_BOT_TOKEN: -4}"
         echo "请输入 Bot Token [当前: $tshow]: "
@@ -410,6 +516,74 @@ initial_config() {
         read -r new_expire
     done
 
+    # 2) 流量来源选择
+    echo
+    echo "请选择流量来源："
+    echo "1) vnstat（本机网卡口径，可做 offset 校准）"
+    echo "2) bwh_api（KiwiVM 面板口径，推荐用于严格对齐面板）"
+    echo "当前: ${TRAFFIC_SOURCE:-vnstat}"
+    read -rp "选择 (1-2) [回车保持当前]: " src_choice
+    if [[ -n "$src_choice" ]]; then
+        case "$src_choice" in
+            1) TRAFFIC_SOURCE="vnstat" ;;
+            2) TRAFFIC_SOURCE="bwh_api" ;;
+            *) echo "无效选择，保持当前：${TRAFFIC_SOURCE:-vnstat}" ;;
+        esac
+    else
+        TRAFFIC_SOURCE=${TRAFFIC_SOURCE:-vnstat}
+    fi
+
+    # 3) KiwiVM API（仅 bwh_api 需要）
+    BWH_API_ENDPOINT=${BWH_API_ENDPOINT:-$BWH_API_ENDPOINT_DEFAULT}
+
+    if [[ "$TRAFFIC_SOURCE" == "bwh_api" ]]; then
+        echo
+        echo "===== 搬瓦工 / KiwiVM API 配置（bwh_api 模式必填）====="
+
+        if [[ -n "$BWH_VEID" ]]; then
+            echo "请输入 VEID [当前: $BWH_VEID]: "
+        else
+            echo "请输入 VEID: "
+        fi
+        read -r new_veid
+        [[ -z "$new_veid" && -n "$BWH_VEID" ]] && new_veid="$BWH_VEID"
+        while ! [[ "$new_veid" =~ ^[0-9]+$ ]]; do
+            echo "VEID 必须为数字，请重新输入："
+            read -r new_veid
+        done
+
+        if [[ -n "$BWH_API_KEY" ]]; then
+            local kshow="${BWH_API_KEY:0:6}...${BWH_API_KEY: -4}"
+            echo "请输入 API_KEY [当前: $kshow]（回车保持不变）: "
+        else
+            echo "请输入 API_KEY: "
+        fi
+        read -r new_key
+        [[ -z "$new_key" && -n "$BWH_API_KEY" ]] && new_key="$BWH_API_KEY"
+        while [ -z "$new_key" ]; do
+            echo "API_KEY 不能为空，请重新输入："
+            read -r new_key
+        done
+
+        echo "API Endpoint [当前: ${BWH_API_ENDPOINT}]（一般无需修改，回车保持）: "
+        read -r new_ep
+        [[ -z "$new_ep" ]] && new_ep="$BWH_API_ENDPOINT"
+
+        # 写入临时变量并做一次测试
+        BWH_VEID="$new_veid"
+        BWH_API_KEY="$new_key"
+        BWH_API_ENDPOINT="$new_ep"
+
+        echo
+        echo "正在测试 KiwiVM API..."
+        if get_bwh_info >/dev/null 2>&1; then
+            echo "API 测试成功。"
+        else
+            echo "API 测试失败：请检查 VEID/API_KEY 是否正确、网络是否可访问。"
+            echo "你仍可保存配置，但 cron 推送会失败。"
+        fi
+    fi
+
     TG_BOT_TOKEN="$new_token"
     TG_CHAT_ID="$new_chat"
     MACHINE_NAME="$new_name"
@@ -417,11 +591,11 @@ initial_config() {
     EXPIRE_DATE="$new_expire"
 
     write_config
-    echo "Telegram 配置已更新成功！"
+    echo "配置已更新成功！"
 }
 
 # ============================================
-# 设置 cron：每分钟执行一次（到点才发日报）
+# 设置 cron：每分钟检查一次（到点才发日报）
 # ============================================
 setup_cron() {
     local entry="* * * * * $SCRIPT_PATH -cron"
@@ -434,22 +608,22 @@ setup_cron() {
 # ============================================
 stop_service() {
     crontab -l 2>/dev/null | grep -v "$SCRIPT_PATH -cron" | crontab -
-    log_cron "Telegram 定时任务已移除"
+    log_cron "定时任务已移除"
     exit 0
 }
 
 # ============================================
-# 主入口（cron 逻辑与 pushplus.sh 对齐）
+# 主入口
 # ============================================
 main() {
     check_running
 
     echo "----------------------------------------------" | tee -a "$CRON_LOG" >/dev/null
-    log_cron "启动 Telegram 通知脚本"
+    log_cron "启动 BWH+Telegram 通知脚本"
 
     if [[ "$*" == *"-cron"* ]]; then
         if ! read_config; then
-            log_cron "Telegram 配置不完整，跳过 cron 执行。"
+            log_cron "配置不完整，跳过 cron 执行。"
             exit 1
         fi
 
@@ -467,19 +641,20 @@ main() {
         exit 0
     fi
 
-    read_config || echo "首次运行请先选择 4 配置 Telegram"
+    read_config || echo "首次运行请先选择 4 配置"
     setup_cron
 
     while true; do
         clear
         echo -e "${BLUE}======================================${PLAIN}"
-        echo -e "${PURPLE}     Telegram 流量通知管理菜单${PLAIN}"
+        echo -e "${PURPLE}   BWH + Telegram 流量通知管理菜单${PLAIN}"
         echo -e "${BLUE}======================================${PLAIN}"
         echo -e "${GREEN}1.${PLAIN} 发送${YELLOW}每日报告${PLAIN}"
         echo -e "${GREEN}2.${PLAIN} 发送${CYAN}测试消息${PLAIN}"
         echo -e "${GREEN}3.${PLAIN} 打印${YELLOW}实时流量${PLAIN}"
-        echo -e "${GREEN}4.${PLAIN} 修改${PURPLE}配置${PLAIN}"
-        echo -e "${RED}5.${PLAIN} 移除定时任务${PLAIN}"
+        echo -e "${GREEN}4.${PLAIN} 修改${PURPLE}配置（含搬瓦工 API）${PLAIN}"
+        echo -e "${GREEN}5.${PLAIN} 修正${YELLOW}vnstat offset${PLAIN}（仅 vnstat 模式）"
+        echo -e "${RED}6.${PLAIN} 移除定时任务${PLAIN}"
         echo -e "${WHITE}0.${PLAIN} 退出${PLAIN}"
         echo -e "${BLUE}======================================${PLAIN}"
         read -rp "请选择操作 [0-6]: " choice
@@ -489,7 +664,14 @@ main() {
             2) test_telegram ;;
             3) get_current_traffic ;;
             4) initial_config ;;
-            5) stop_service ;;
+            5)
+                if [[ "${TRAFFIC_SOURCE:-vnstat}" == "vnstat" ]]; then
+                    flow_setting
+                else
+                    echo "当前为 bwh_api 模式，不需要 offset 修正。"
+                fi
+                ;;
+            6) stop_service ;;
             0) exit 0 ;;
             *) echo "无效选项，请重新输入" ;;
         esac
