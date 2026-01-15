@@ -2,7 +2,7 @@
 # ============================================
 # Push - Telegram / PushPlus 流量监控通知脚本（合并版）
 # 文件名：/root/TrafficCop/push.sh
-# 版本：2026-01-15 (fix: split/telegram/pushplus)
+# 版本：2026-01-15 (Fix: Telegram HTML <br> unsupported)
 #
 # 支持两种流量来源：
 #   1) vnstat（本机网卡口径，支持 offset 校准；周期按 TrafficCop 配置）
@@ -27,26 +27,14 @@ SCRIPT_PATH="$WORK_DIR/push.sh"
 TRAFFIC_CONFIG="$WORK_DIR/traffic_config.txt"
 OFFSET_FILE="$WORK_DIR/traffic_offset.dat"
 
-# KiwiVM API Endpoint（一般不需要改）
 BWH_API_ENDPOINT_DEFAULT="https://api.64clouds.com/v1/getServiceInfo"
-
-# PushPlus Endpoint
 PUSHPLUS_ENDPOINT_DEFAULT="https://www.pushplus.plus/send"
 
-# 颜色
 RED="\033[31m"; GREEN="\033[32m"; YELLOW="\033[33m"; BLUE="\033[34m"
 PURPLE="\033[35m"; CYAN="\033[36m"; WHITE="\033[37m"; PLAIN="\033[0m"
 
 cd "$WORK_DIR" || exit 1
 
-# 全局报告变量（build_report 写入）
-REPORT_TITLE=""
-REPORT_PLAIN=""
-REPORT_HTML=""
-
-# ============================================
-# 日志裁剪：只保留最近 150 行
-# ============================================
 trim_cron_log() {
     local file="$CRON_LOG"
     local max_lines=150
@@ -54,23 +42,16 @@ trim_cron_log() {
 
     local cnt
     cnt=$(wc -l < "$file" 2>/dev/null || echo 0)
-
     if (( cnt > max_lines )); then
         tail -n "$max_lines" "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
     fi
 }
 
-# ============================================
-# 记录 cron 日志（并自动裁剪）
-# ============================================
 log_cron() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') : $*" | tee -a "$CRON_LOG" >/dev/null
     trim_cron_log
 }
 
-# ============================================
-# 防止重复运行（pidof）
-# ============================================
 check_running() {
     if pidof -x "$(basename "$0")" -o $$ >/dev/null 2>&1; then
         log_cron "已有实例运行，退出。"
@@ -78,22 +59,11 @@ check_running() {
     fi
 }
 
-# ============================================
-# 读取配置（push_config.txt）
-# 必填：MACHINE_NAME DAILY_REPORT_TIME EXPIRE_DATE
-# 可选：PUSH_CHANNEL(tg/pushplus/both) TRAFFIC_SOURCE(bwh_api/vnstat)
-#
-# Telegram：TG_BOT_TOKEN TG_CHAT_ID
-# PushPlus：PUSHPLUS_TOKEN PUSHPLUS_TOPIC(可选) PUSHPLUS_TEMPLATE(可选，默认html)
-#
-# KiwiVM：BWH_VEID BWH_API_KEY BWH_API_ENDPOINT(可选)
-# ============================================
 read_config() {
     [ ! -s "$CONFIG_FILE" ] && return 1
     # shellcheck disable=SC1090
     source "$CONFIG_FILE" 2>/dev/null || return 1
 
-    # 默认值
     PUSH_CHANNEL=${PUSH_CHANNEL:-tg}              # tg / pushplus / both
     TRAFFIC_SOURCE=${TRAFFIC_SOURCE:-vnstat}      # vnstat / bwh_api
     BWH_API_ENDPOINT=${BWH_API_ENDPOINT:-$BWH_API_ENDPOINT_DEFAULT}
@@ -103,7 +73,6 @@ read_config() {
 
     [[ -z "$MACHINE_NAME" || -z "$DAILY_REPORT_TIME" || -z "$EXPIRE_DATE" ]] && return 1
 
-    # 渠道校验
     case "$PUSH_CHANNEL" in
         tg)
             [[ -z "$TG_BOT_TOKEN" || -z "$TG_CHAT_ID" ]] && return 1
@@ -120,7 +89,6 @@ read_config() {
             ;;
     esac
 
-    # bwh_api 校验
     if [[ "$TRAFFIC_SOURCE" == "bwh_api" ]]; then
         [[ -z "$BWH_VEID" || -z "$BWH_API_KEY" ]] && return 1
     fi
@@ -128,9 +96,6 @@ read_config() {
     return 0
 }
 
-# ============================================
-# 写入配置（push_config.txt）
-# ============================================
 write_config() {
     cat >"$CONFIG_FILE" <<EOF
 # ===== 基本信息 =====
@@ -162,9 +127,6 @@ EOF
     log_cron "配置已保存到 $CONFIG_FILE"
 }
 
-# ============================================
-# 读取 TrafficCop 配置（用于展示周期；vnstat 模式也会用到）
-# ============================================
 read_traffic_config() {
     [ ! -s "$TRAFFIC_CONFIG" ] && return 1
 
@@ -188,9 +150,6 @@ read_traffic_config() {
     return 0
 }
 
-# ============================================
-# 获取当前周期开始日期（TrafficCop 自定义口径；展示用兜底）
-# ============================================
 get_period_start_date() {
     local y m d
     y=$(date +%Y); m=$(date +%m); d=$(date +%d)
@@ -226,9 +185,6 @@ get_period_start_date() {
     esac
 }
 
-# ============================================
-# 获取当前周期结束日期（TrafficCop 自定义口径；展示用兜底）
-# ============================================
 get_period_end_date() {
     local start="$1"
     case "$TRAFFIC_PERIOD" in
@@ -239,10 +195,6 @@ get_period_end_date() {
     esac
 }
 
-# ============================================
-# vnstat：本周期已用流量（GB，3 位小数）
-# usage = raw_all_time - offset
-# ============================================
 get_traffic_usage_vnstat() {
     local offset raw=0 line rx tx real
 
@@ -277,10 +229,6 @@ get_traffic_usage_vnstat() {
     printf "%.3f" "$(echo "scale=6; $real/1024/1024/1024" | bc 2>/dev/null || echo 0)"
 }
 
-# ============================================
-# KiwiVM API：读取搬瓦工面板口径流量
-# 输出：used_gib plan_gib next_reset_ts used_bytes plan_bytes
-# ============================================
 get_bwh_info() {
     local json err used_bytes plan_bytes next_reset
 
@@ -307,12 +255,6 @@ get_bwh_info() {
     return 0
 }
 
-# ============================================
-# 根据 KiwiVM next_reset_ts 推算周期日期（仅显示日期）
-# start = reset_date - 1 month
-# end   = reset_date - 1 day
-# 输出：start_date end_date
-# ============================================
 get_bwh_cycle_dates() {
     local next_reset_ts="$1"
     [[ "$next_reset_ts" =~ ^[0-9]+$ ]] || return 1
@@ -328,15 +270,12 @@ get_bwh_cycle_dates() {
     return 0
 }
 
-# ============================================
-# 生成报告内容（写入全局变量：REPORT_TITLE/REPORT_PLAIN/REPORT_HTML）
-# ============================================
+# 重要修复：
+# Telegram 的 parse_mode=HTML 不支持 <br>，只用 \n 换行 + 少量合法标签（b/i/u/s/code/pre/a）
 build_report() {
-    REPORT_TITLE=""; REPORT_PLAIN=""; REPORT_HTML=""
-
     local today expire_ts today_ts diff_days remain_emoji
     local disk_used disk_total disk_pct disk_line
-    local start end usage limit_gb
+    local start end usage limit
 
     today=$(date +%Y-%m-%d)
 
@@ -362,7 +301,6 @@ build_report() {
         disk_line="未知"
     fi
 
-    # 周期兜底（按 TrafficCop 配置）
     if read_traffic_config; then
         start=$(get_period_start_date)
         end=$(get_period_end_date "$start")
@@ -383,160 +321,162 @@ build_report() {
         }
 
         usage="$used_gb"
-        limit_gb="$plan_gb"
+        limit="${plan_gb} GB"
     else
-        # vnstat
         read_traffic_config || return 1
         usage=$(get_traffic_usage_vnstat)
-        limit_gb="$TRAFFIC_LIMIT"
+        limit="${TRAFFIC_LIMIT} GB"
     fi
 
-    REPORT_TITLE="🎯 [${MACHINE_NAME}] 流量统计"
+    local title="🎯 [${MACHINE_NAME}] 流量统计"
 
-    REPORT_PLAIN="${REPORT_TITLE}
+    local text_plain
+    text_plain="${title}
 
 🕒日期：${today}
 ${remain_emoji}剩余：${diff_days}天
 🔄周期：${start} 到 ${end}
 ⌛已用：${usage} GB
-🌐套餐：${limit_gb} GB
+🌐套餐：${limit}
 💾空间：${disk_line}
 "
 
-    REPORT_HTML="<b>${REPORT_TITLE}</b><br><br>
+    # Telegram HTML：不使用 <br>，换行用 \n
+    local tg_html
+    tg_html="<b>${title}</b>
+
+🕒日期：${today}
+${remain_emoji}剩余：${diff_days}天
+🔄周期：${start} 到 ${end}
+⌛已用：${usage} GB
+🌐套餐：${limit}
+💾空间：${disk_line}"
+
+    # PushPlus 继续使用 <br>（PushPlus 的 html 模板支持）
+    local pp_html
+    pp_html="<b>${title}</b><br><br>
 🕒日期：${today}<br>
 ${remain_emoji}剩余：${diff_days}天<br>
 🔄周期：${start} 到 ${end}<br>
 ⌛已用：${usage} GB<br>
-🌐套餐：${limit_gb} GB<br>
+🌐套餐：${limit}<br>
 💾空间：${disk_line}
 "
+
+    # 输出四行：title / plain / tg_html / pushplus_html
+    printf "%s\n%s\n%s\n%s\n" "$title" "$text_plain" "$tg_html" "$pp_html"
     return 0
 }
 
-# ============================================
-# Telegram 推送（校验 .ok）
-# ============================================
 tg_send() {
     local html="$1"
-    local resp ok
+    local resp http_code ok
 
-    resp=$(curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+    resp=$(curl -sS -w "\nHTTP_CODE:%{http_code}\n" -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
         -d "chat_id=${TG_CHAT_ID}" \
         --data-urlencode "text=${html}" \
         -d "parse_mode=HTML" \
-        -d "disable_web_page_preview=true" 2>&1)
+        -d "disable_web_page_preview=true" \
+        --connect-timeout 8 --max-time 15)
 
-    ok=$(echo "$resp" | jq -r '.ok // empty' 2>/dev/null)
-    if [[ "$ok" == "true" ]]; then
+    http_code=$(echo "$resp" | awk -F: '/HTTP_CODE:/{print $2}' | tail -n 1)
+    ok=$(echo "$resp" | sed '/HTTP_CODE:/d' | jq -r '.ok // empty' 2>/dev/null)
+
+    if [[ "$http_code" == "200" && "$ok" == "true" ]]; then
         return 0
     fi
 
-    log_cron "Telegram 发送失败：resp=$resp"
+    log_cron "Telegram 发送失败：resp=$(echo "$resp" | sed '/HTTP_CODE:/d' | tr '\n' ' ' | cut -c1-1200)"
     return 1
 }
 
-# ============================================
-# PushPlus 推送（校验 code==200）
-# ============================================
 pushplus_send() {
     local title="$1"
     local content="$2"
-    local resp code
+    local resp http_code code
 
-    # topic 可选；不填则推送到个人
     local topic_arg=()
     [[ -n "$PUSHPLUS_TOPIC" ]] && topic_arg=(-d "topic=${PUSHPLUS_TOPIC}")
 
-    resp=$(curl -sS -X POST "$PUSHPLUS_ENDPOINT" \
+    resp=$(curl -sS -w "\nHTTP_CODE:%{http_code}\n" -X POST "$PUSHPLUS_ENDPOINT" \
         -d "token=${PUSHPLUS_TOKEN}" \
         "${topic_arg[@]}" \
         --data-urlencode "title=${title}" \
         --data-urlencode "content=${content}" \
-        -d "template=${PUSHPLUS_TEMPLATE}" 2>&1)
+        -d "template=${PUSHPLUS_TEMPLATE}" \
+        --connect-timeout 8 --max-time 15)
 
-    # PushPlus 常见返回：{"code":200,"msg":"请求成功","data":"..."}
-    code=$(echo "$resp" | jq -r '.code // empty' 2>/dev/null)
-    if [[ "$code" == "200" ]]; then
+    http_code=$(echo "$resp" | awk -F: '/HTTP_CODE:/{print $2}' | tail -n 1)
+    code=$(echo "$resp" | sed '/HTTP_CODE:/d' | jq -r '.code // empty' 2>/dev/null)
+
+    if [[ "$http_code" == "200" && "$code" == "200" ]]; then
         return 0
     fi
 
-    log_cron "PushPlus 发送失败：resp=$resp"
+    log_cron "PushPlus 发送失败：resp=$(echo "$resp" | sed '/HTTP_CODE:/d' | tr '\n' ' ' | cut -c1-1200)"
     return 1
 }
 
-# ============================================
-# 发送测试消息
-# ============================================
 test_push() {
     local title="🖥️ [${MACHINE_NAME}] 测试消息"
-    local plain
-    plain=$(printf "%s\n\n%s\n" "$title" "这是一条测试消息，如果您收到此推送，说明配置正常！")
-    local html="<b>${title}</b><br><br>这是一条测试消息，如果您收到此推送，说明配置正常！"
+    local plain="${title}\n\n这是一条测试消息，如果您收到此推送，说明配置正常！"
+    local tg_html="<b>${title}</b>
+
+这是一条测试消息，如果您收到此推送，说明配置正常！"
+    local pp_html="<b>${title}</b><br><br>这是一条测试消息，如果您收到此推送，说明配置正常！"
 
     case "$PUSH_CHANNEL" in
         tg)
-            tg_send "$html" && log_cron "Telegram 测试推送成功" || log_cron "Telegram 测试推送失败"
+            tg_send "$tg_html" && log_cron "Telegram 测试推送成功" || log_cron "Telegram 测试推送失败"
             ;;
         pushplus)
-            pushplus_send "$title" "$html" && log_cron "PushPlus 测试推送成功" || log_cron "PushPlus 测试推送失败"
+            pushplus_send "$title" "$pp_html" && log_cron "PushPlus 测试推送成功" || log_cron "PushPlus 测试推送失败"
             ;;
         both)
-            tg_send "$html" && log_cron "Telegram 测试推送成功" || log_cron "Telegram 测试推送失败"
-            pushplus_send "$title" "$html" && log_cron "PushPlus 测试推送成功" || log_cron "PushPlus 测试推送失败"
+            tg_send "$tg_html" && log_cron "Telegram 测试推送成功" || log_cron "Telegram 测试推送失败"
+            pushplus_send "$title" "$pp_html" && log_cron "PushPlus 测试推送成功" || log_cron "PushPlus 测试推送失败"
             ;;
     esac
 
     echo -e "$plain"
 }
 
-# ============================================
-# 发送每日报告
-# ============================================
 daily_report() {
-    build_report || { log_cron "生成报告失败（流量来源/配置/依赖异常）"; return 1; }
+    local out title plain tg_html pp_html
+    out=$(build_report) || { log_cron "生成报告失败（流量来源/配置/依赖异常）"; return 1; }
+
+    title=$(echo "$out" | sed -n '1p')
+    plain=$(echo "$out" | sed -n '2p')
+    tg_html=$(echo "$out" | sed -n '3p')
+    pp_html=$(echo "$out" | sed -n '4p')
 
     case "$PUSH_CHANNEL" in
         tg)
-            if tg_send "$REPORT_HTML"; then
-                log_cron "Telegram 推送成功"
-            else
-                log_cron "Telegram 推送失败"
-            fi
+            if tg_send "$tg_html"; then log_cron "Telegram 推送成功"; else log_cron "Telegram 推送失败"; fi
             ;;
         pushplus)
-            if pushplus_send "$REPORT_TITLE" "$REPORT_HTML"; then
-                log_cron "PushPlus 推送成功"
-            else
-                log_cron "PushPlus 推送失败"
-            fi
+            if pushplus_send "$title" "$pp_html"; then log_cron "PushPlus 推送成功"; else log_cron "PushPlus 推送失败"; fi
             ;;
         both)
-            tg_send "$REPORT_HTML" && log_cron "Telegram 推送成功" || log_cron "Telegram 推送失败"
-            pushplus_send "$REPORT_TITLE" "$REPORT_HTML" && log_cron "PushPlus 推送成功" || log_cron "PushPlus 推送失败"
+            if tg_send "$tg_html"; then log_cron "Telegram 推送成功"; else log_cron "Telegram 推送失败"; fi
+            if pushplus_send "$title" "$pp_html"; then log_cron "PushPlus 推送成功"; else log_cron "PushPlus 推送失败"; fi
             ;;
     esac
 
-    # 交互时也打印一份
-    echo -e "$REPORT_PLAIN"
+    echo -e "$plain"
 }
 
-# ============================================
-# 终端打印实时流量
-# ============================================
 get_current_traffic() {
-    build_report || { echo "生成报告失败（请检查配置/依赖）"; return 1; }
-
+    local out plain
+    out=$(build_report) || { echo "生成报告失败（请检查配置/依赖）"; return 1; }
+    plain=$(echo "$out" | sed -n '2p')
     echo "========================================"
     echo "       实时流量信息"
     echo "========================================"
-    echo -e "$REPORT_PLAIN"
+    echo -e "$plain"
     echo "========================================"
 }
 
-# ============================================
-# vnstat 模式：手动修正 offset
-# ============================================
 flow_setting() {
     echo "（仅 vnstat 模式可用）请输入本周期实际已用流量（GiB）:"
     read -r real_gb
@@ -576,9 +516,6 @@ flow_setting() {
     echo "已修正 offset → $new_offset（当前显示 ≈${real_gb} GiB）"
 }
 
-# ============================================
-# 配置向导（交互）：选择推送渠道 + 流量来源 + 各自参数
-# ============================================
 initial_config() {
     echo "======================================"
     echo "     修改 Push（TG / PushPlus）配置"
@@ -624,7 +561,6 @@ initial_config() {
         PUSH_CHANNEL=${PUSH_CHANNEL:-tg}
     fi
 
-    # Telegram 配置
     if [[ "$PUSH_CHANNEL" == "tg" || "$PUSH_CHANNEL" == "both" ]]; then
         echo
         echo "===== Telegram 配置 ====="
@@ -651,7 +587,6 @@ initial_config() {
         TG_CHAT_ID="$new_chat"
     fi
 
-    # PushPlus 配置
     if [[ "$PUSH_CHANNEL" == "pushplus" || "$PUSH_CHANNEL" == "both" ]]; then
         echo
         echo "===== PushPlus 配置 ====="
@@ -695,7 +630,6 @@ initial_config() {
         TRAFFIC_SOURCE=${TRAFFIC_SOURCE:-vnstat}
     fi
 
-    # bwh_api 参数
     BWH_API_ENDPOINT=${BWH_API_ENDPOINT:-$BWH_API_ENDPOINT_DEFAULT}
     if [[ "$TRAFFIC_SOURCE" == "bwh_api" ]]; then
         echo
@@ -751,27 +685,18 @@ initial_config() {
     echo "配置已更新成功！"
 }
 
-# ============================================
-# 设置 cron：每分钟检查一次（到点才发日报）
-# ============================================
 setup_cron() {
     local entry="* * * * * $SCRIPT_PATH -cron"
     (crontab -l 2>/dev/null | grep -v "$SCRIPT_PATH -cron" ; echo "$entry") | crontab -
     log_cron "✅ Crontab 已更新：每分钟检查一次，按设定时间发送每日报告。"
 }
 
-# ============================================
-# 停止服务：移除 cron
-# ============================================
 stop_service() {
     crontab -l 2>/dev/null | grep -v "$SCRIPT_PATH -cron" | crontab -
     log_cron "定时任务已移除"
     exit 0
 }
 
-# ============================================
-# 主入口
-# ============================================
 main() {
     check_running
 
@@ -789,7 +714,7 @@ main() {
         log_cron "cron 模式，当前时间: $current_time，设定报告时间: $DAILY_REPORT_TIME"
 
         if [ "$current_time" = "$DAILY_REPORT_TIME" ]; then
-            log_cron "时间匹配，开始发送每日报告。"
+            echo "$(date '+%Y-%m-%d %H:%M:%S') : 时间匹配，开始发送每日报告。" >"$CRON_LOG"
             daily_report
         else
             log_cron "时间未到每日报告点，不发送。"
