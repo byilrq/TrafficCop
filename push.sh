@@ -2,7 +2,7 @@
 # ============================================
 # Push - Telegram / PushPlus 流量监控通知脚本（合并版）
 # 文件名：/root/TrafficCop/push.sh
-# 版本：2026-01-15
+# 版本：2026-01-15 (fix: split/telegram/pushplus)
 #
 # 支持两种流量来源：
 #   1) vnstat（本机网卡口径，支持 offset 校准；周期按 TrafficCop 配置）
@@ -38,6 +38,11 @@ RED="\033[31m"; GREEN="\033[32m"; YELLOW="\033[33m"; BLUE="\033[34m"
 PURPLE="\033[35m"; CYAN="\033[36m"; WHITE="\033[37m"; PLAIN="\033[0m"
 
 cd "$WORK_DIR" || exit 1
+
+# 全局报告变量（build_report 写入）
+REPORT_TITLE=""
+REPORT_PLAIN=""
+REPORT_HTML=""
 
 # ============================================
 # 日志裁剪：只保留最近 150 行
@@ -324,12 +329,14 @@ get_bwh_cycle_dates() {
 }
 
 # ============================================
-# 生成报告内容（同时返回：title + text_plain + text_html）
+# 生成报告内容（写入全局变量：REPORT_TITLE/REPORT_PLAIN/REPORT_HTML）
 # ============================================
 build_report() {
+    REPORT_TITLE=""; REPORT_PLAIN=""; REPORT_HTML=""
+
     local today expire_ts today_ts diff_days remain_emoji
     local disk_used disk_total disk_pct disk_line
-    local start end usage limit
+    local start end usage limit_gb
 
     today=$(date +%Y-%m-%d)
 
@@ -376,72 +383,86 @@ build_report() {
         }
 
         usage="$used_gb"
-        limit="${plan_gb} GB"
+        limit_gb="$plan_gb"
     else
         # vnstat
         read_traffic_config || return 1
         usage=$(get_traffic_usage_vnstat)
-        limit="${TRAFFIC_LIMIT} GB"
+        limit_gb="$TRAFFIC_LIMIT"
     fi
 
-    local title="🎯 [${MACHINE_NAME}] 流量统计"
+    REPORT_TITLE="🎯 [${MACHINE_NAME}] 流量统计"
 
-    local text_plain
-    text_plain="${title}
+    REPORT_PLAIN="${REPORT_TITLE}
 
 🕒日期：${today}
 ${remain_emoji}剩余：${diff_days}天
 🔄周期：${start} 到 ${end}
 ⌛已用：${usage} GB
-🌐套餐：${limit}
+🌐套餐：${limit_gb} GB
 💾空间：${disk_line}
 "
 
-    local text_html
-    text_html="<b>${title}</b><br><br>
+    REPORT_HTML="<b>${REPORT_TITLE}</b><br><br>
 🕒日期：${today}<br>
 ${remain_emoji}剩余：${diff_days}天<br>
 🔄周期：${start} 到 ${end}<br>
 ⌛已用：${usage} GB<br>
-🌐套餐：${limit}<br>
+🌐套餐：${limit_gb} GB<br>
 💾空间：${disk_line}
 "
-
-    # 输出三行：title / plain / html（供调用方读取）
-    printf "%s\n%s\n%s\n" "$title" "$text_plain" "$text_html"
     return 0
 }
 
 # ============================================
-# Telegram 推送
+# Telegram 推送（校验 .ok）
 # ============================================
 tg_send() {
     local html="$1"
+    local resp ok
 
-    curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+    resp=$(curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
         -d "chat_id=${TG_CHAT_ID}" \
-        -d "text=${html}" \
+        --data-urlencode "text=${html}" \
         -d "parse_mode=HTML" \
-        -d "disable_web_page_preview=true" >/dev/null 2>&1
+        -d "disable_web_page_preview=true" 2>&1)
+
+    ok=$(echo "$resp" | jq -r '.ok // empty' 2>/dev/null)
+    if [[ "$ok" == "true" ]]; then
+        return 0
+    fi
+
+    log_cron "Telegram 发送失败：resp=$resp"
+    return 1
 }
 
 # ============================================
-# PushPlus 推送（html 模板）
+# PushPlus 推送（校验 code==200）
 # ============================================
 pushplus_send() {
     local title="$1"
-    local html="$2"
+    local content="$2"
+    local resp code
 
     # topic 可选；不填则推送到个人
     local topic_arg=()
     [[ -n "$PUSHPLUS_TOPIC" ]] && topic_arg=(-d "topic=${PUSHPLUS_TOPIC}")
 
-    curl -s -X POST "$PUSHPLUS_ENDPOINT" \
+    resp=$(curl -sS -X POST "$PUSHPLUS_ENDPOINT" \
         -d "token=${PUSHPLUS_TOKEN}" \
         "${topic_arg[@]}" \
-        -d "title=${title}" \
-        -d "content=${html}" \
-        -d "template=${PUSHPLUS_TEMPLATE}" >/dev/null 2>&1
+        --data-urlencode "title=${title}" \
+        --data-urlencode "content=${content}" \
+        -d "template=${PUSHPLUS_TEMPLATE}" 2>&1)
+
+    # PushPlus 常见返回：{"code":200,"msg":"请求成功","data":"..."}
+    code=$(echo "$resp" | jq -r '.code // empty' 2>/dev/null)
+    if [[ "$code" == "200" ]]; then
+        return 0
+    fi
+
+    log_cron "PushPlus 发送失败：resp=$resp"
+    return 1
 }
 
 # ============================================
@@ -449,7 +470,8 @@ pushplus_send() {
 # ============================================
 test_push() {
     local title="🖥️ [${MACHINE_NAME}] 测试消息"
-    local plain="${title}\n\n这是一条测试消息，如果您收到此推送，说明配置正常！"
+    local plain
+    plain=$(printf "%s\n\n%s\n" "$title" "这是一条测试消息，如果您收到此推送，说明配置正常！")
     local html="<b>${title}</b><br><br>这是一条测试消息，如果您收到此推送，说明配置正常！"
 
     case "$PUSH_CHANNEL" in
@@ -472,53 +494,43 @@ test_push() {
 # 发送每日报告
 # ============================================
 daily_report() {
-    local out title plain html
-    out=$(build_report) || { log_cron "生成报告失败（流量来源/配置/依赖异常）"; return 1; }
-
-    title=$(echo "$out" | sed -n '1p')
-    plain=$(echo "$out" | sed -n '2p')
-    html=$(echo "$out" | sed -n '3p')
+    build_report || { log_cron "生成报告失败（流量来源/配置/依赖异常）"; return 1; }
 
     case "$PUSH_CHANNEL" in
         tg)
-            if tg_send "$html"; then
+            if tg_send "$REPORT_HTML"; then
                 log_cron "Telegram 推送成功"
             else
                 log_cron "Telegram 推送失败"
             fi
             ;;
         pushplus)
-            if pushplus_send "$title" "$html"; then
+            if pushplus_send "$REPORT_TITLE" "$REPORT_HTML"; then
                 log_cron "PushPlus 推送成功"
             else
                 log_cron "PushPlus 推送失败"
             fi
             ;;
         both)
-            if tg_send "$html"; then log_cron "Telegram 推送成功"; else log_cron "Telegram 推送失败"; fi
-            if pushplus_send "$title" "$html"; then log_cron "PushPlus 推送成功"; else log_cron "PushPlus 推送失败"; fi
+            tg_send "$REPORT_HTML" && log_cron "Telegram 推送成功" || log_cron "Telegram 推送失败"
+            pushplus_send "$REPORT_TITLE" "$REPORT_HTML" && log_cron "PushPlus 推送成功" || log_cron "PushPlus 推送失败"
             ;;
     esac
 
     # 交互时也打印一份
-    echo -e "$plain"
+    echo -e "$REPORT_PLAIN"
 }
 
 # ============================================
 # 终端打印实时流量
 # ============================================
 get_current_traffic() {
-    local out title plain html
-    out=$(build_report) || { echo "生成报告失败（请检查配置/依赖）"; return 1; }
-
-    title=$(echo "$out" | sed -n '1p')
-    plain=$(echo "$out" | sed -n '2p')
-    html=$(echo "$out" | sed -n '3p')
+    build_report || { echo "生成报告失败（请检查配置/依赖）"; return 1; }
 
     echo "========================================"
     echo "       实时流量信息"
     echo "========================================"
-    echo -e "$plain"
+    echo -e "$REPORT_PLAIN"
     echo "========================================"
 }
 
@@ -777,7 +789,7 @@ main() {
         log_cron "cron 模式，当前时间: $current_time，设定报告时间: $DAILY_REPORT_TIME"
 
         if [ "$current_time" = "$DAILY_REPORT_TIME" ]; then
-            echo "$(date '+%Y-%m-%d %H:%M:%S') : 时间匹配，开始发送每日报告。" >"$CRON_LOG"
+            log_cron "时间匹配，开始发送每日报告。"
             daily_report
         else
             log_cron "时间未到每日报告点，不发送。"
