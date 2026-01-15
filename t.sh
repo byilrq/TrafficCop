@@ -1,6 +1,6 @@
 #!/bin/bash
 # TrafficCop 管理器 - 交互式管理工具
-# 版本 1.0
+# 版本 1.1（合并推送：push.sh，移除独立 tg_push.sh / pushplus.sh）
 
 # 颜色定义
 RED='\033[0;31m'
@@ -26,15 +26,19 @@ check_root() {
 # 创建工作目录
 create_work_dir() {
     mkdir -p "$WORK_DIR"
-    cd "$WORK_DIR"
+    cd "$WORK_DIR" || exit 1
 }
 
 # 下载脚本
 install_script() {
     local script_name="$1"
     echo -e "${YELLOW}正在下载 $script_name...${NC}"
-    curl -fsSL "$REPO_URL/$script_name" -o "$WORK_DIR/$script_name"
+    if ! curl -fsSL "$REPO_URL/$script_name" -o "$WORK_DIR/$script_name"; then
+        echo -e "${RED}下载失败：$script_name${NC}"
+        return 1
+    fi
     chmod +x "$WORK_DIR/$script_name"
+    return 0
 }
 
 # 运行脚本
@@ -46,67 +50,50 @@ run_script() {
 # 安装流量监控
 install_monitor() {
     echo -e "${CYAN}正在安装流量监控功能...${NC}"
-    install_script "trafficcop.sh"
+    install_script "trafficcop.sh" || { read -p "按回车键继续..."; return; }
     run_script "$WORK_DIR/trafficcop.sh"
     echo -e "${GREEN}流量监控功能安装完成！${NC}"
     read -p "按回车键继续..."
 }
 
-# 安装Telegram通知
-install_tg_notifier() {
-    echo -e "${CYAN}正在安装Telegram通知功能...${NC}"
-    install_script "tg_push.sh"
-    run_script "$WORK_DIR/tg_push.sh"
-    echo -e "${GREEN}tg_push.sh执行完毕！！${NC}"
+# 安装/管理推送（合并版 push.sh：TG / PushPlus）
+install_push_manager() {
+    echo -e "${CYAN}正在安装/管理 推送功能（push.sh：TG / PushPlus 合并版）...${NC}"
+    install_script "push.sh" || { read -p "按回车键继续..."; return; }
+    run_script "$WORK_DIR/push.sh"
+    echo -e "${GREEN}push.sh 执行完毕！${NC}"
     read -p "按回车键继续..."
 }
-
-# 安装PushPlus通知
-install_pushplus() {
-    echo -e "${CYAN}正在安装PushPlus通知功能...${NC}"
-    install_script "pushplus.sh"
-    run_script "$WORK_DIR/pushplus.sh"
-    echo -e "${GREEN} pushplus.sh执行完毕！${NC}"
-    read -p "按回车键继续..."
-}
-
 
 # 查看日志
 view_logs() {
     echo -e "${CYAN}查看日志${NC}"
     echo "1) 流量监控日志"
-    echo "2) Telegram通知日志"
-    echo "3) PushPlus通知日志"
+    echo "2) 推送日志（push.sh）"
     echo "0) 返回主菜单"
-    
-    read -p "请选择要查看的日志 [0-5]: " log_choice
-    
+
+    read -p "请选择要查看的日志 [0-2]: " log_choice
+
     case $log_choice in
         1)
             if [ -f "$WORK_DIR/traffic_monitor.log" ]; then
                 echo -e "${YELLOW}====== 最近 50 条 流量监控日志 ======${NC}"
                 tail -50 "$WORK_DIR/traffic_monitor.log"
+            elif [ -f "$WORK_DIR/traffic.log" ]; then
+                echo -e "${YELLOW}====== 最近 50 条 流量监控日志（traffic.log） ======${NC}"
+                tail -50 "$WORK_DIR/traffic.log"
             else
                 echo -e "${RED}流量监控日志不存在${NC}"
-                echo -e "（预期位置: $WORK_DIR/traffic.log）"
+                echo -e "（预期位置: $WORK_DIR/traffic_monitor.log 或 $WORK_DIR/traffic.log）"
             fi
             ;;
         2)
-            if [ -f "$WORK_DIR/tg_notifier_cron.log" ]; then
-                echo -e "${YELLOW}====== 最近 20 条 Telegram 通知日志 ======${NC}"
-                tail -20 "$WORK_DIR/tg_notifier_cron.log"
+            if [ -f "$WORK_DIR/push_cron.log" ]; then
+                echo -e "${YELLOW}====== 最近 50 条 推送日志（push.sh） ======${NC}"
+                tail -50 "$WORK_DIR/push_cron.log"
             else
-                echo -e "${RED}Telegram通知日志不存在${NC}"
-                echo -e "（预期位置: $WORK_DIR/tg_notifier_cron.log）"
-            fi
-            ;;
-        3)
-            if [ -f "$WORK_DIR/pushplus_notifier_cron.log" ]; then
-                echo -e "${YELLOW}====== 最近 20 条 PushPlus 通知日志 ======${NC}"
-                tail -20 "$WORK_DIR/pushplus_cron.log"
-            else
-                echo -e "${RED}PushPlus通知日志不存在${NC}"
-                echo -e "（预期位置: $WORK_DIR/pushplus_cron.log）"
+                echo -e "${RED}推送日志不存在${NC}"
+                echo -e "（预期位置: $WORK_DIR/push_cron.log）"
             fi
             ;;
         0)
@@ -116,50 +103,40 @@ view_logs() {
             echo -e "${RED}无效的选择${NC}"
             ;;
     esac
-    
+
     read -p "按回车键继续..."
 }
-
 
 # 查看当前配置
 view_config() {
     echo -e "${CYAN}查看当前配置${NC}"
-    echo "1) 流量监控配置"
-    echo "2) Telegram通知配置"
-    echo "3) PushPlus通知配置"
-    echo "4) cron任务配置"
+    echo "1) 流量监控配置（traffic_config.txt）"
+    echo "2) 推送配置（push_config.txt）"
+    echo "3) cron任务配置"
     echo "0) 返回主菜单"
-    
-    read -p "请选择要查看的配置类型 [0-4]: " config_choice
-    
+
+    read -p "请选择要查看的配置类型 [0-3]: " config_choice
+
     case $config_choice in
         1)
-            if [ -f "$WORK_DIR/traffic_monitor_config.txt" ]; then
-                cat "$WORK_DIR/traffic_monitor_config.txt"
+            if [ -f "$WORK_DIR/traffic_config.txt" ]; then
+                cat "$WORK_DIR/traffic_config.txt"
             else
-                echo -e "${RED}流量监控配置不存在${NC}"
+                echo -e "${RED}流量监控配置不存在：$WORK_DIR/traffic_config.txt${NC}"
             fi
             ;;
         2)
-            if [ -f "$WORK_DIR/tg_notifier_config.txt" ]; then
-                cat "$WORK_DIR/tg_notifier_config.txt"
+            if [ -f "$WORK_DIR/push_config.txt" ]; then
+                cat "$WORK_DIR/push_config.txt"
             else
-                echo -e "${RED}Telegram通知配置不存在${NC}"
+                echo -e "${RED}推送配置不存在：$WORK_DIR/push_config.txt${NC}"
             fi
             ;;
         3)
-            if [ -f "$WORK_DIR/pushplus_notifier_config.txt" ]; then
-                cat "$WORK_DIR/pushplus_notifier_config.txt"
-            else
-                echo -e "${RED}PushPlus通知配置不存在${NC}"
-            fi
-            ;;
-        4)
             echo -e "${CYAN}当前 cron 任务列表${NC}"
             echo "--------------------------------------"
-            # 检查当前用户 crontab
             if crontab -l >/dev/null 2>&1; then
-                crontab -l | grep -E "TrafficCop|pushplus|tg_notifier|traffic_monitor" --color=always || echo "（未发现相关任务）"
+                crontab -l | grep -E "TrafficCop|trafficcop|traffic_monitor|push\.sh|push_cron|pushplus|tg_push|tg_notifier" --color=always || echo "（未发现相关任务）"
             else
                 echo -e "${RED}未找到当前用户的 crontab 任务${NC}"
             fi
@@ -177,35 +154,41 @@ view_config() {
             echo -e "${RED}无效的选择${NC}"
             ;;
     esac
-    
+
     read -p "按回车键继续..."
 }
-
 
 # 停止所有服务
 stop_all_services() {
     echo -e "${CYAN}正在停止所有TrafficCop服务...${NC}"
-    
+
     # 停止流量监控进程
     pkill -f "trafficcop.sh" 2>/dev/null
     pkill -f "traffic_monitor.sh" 2>/dev/null
     echo "✓ 流量监控进程已停止"
-    
-    # 移除cron任务
-    crontab -l 2>/dev/null | grep -v "trafficcop.sh\|traffic_monitor.sh" | crontab - 2>/dev/null
+
+    # 停止推送进程
+    pkill -f "push.sh" 2>/dev/null
+    pkill -f "tg_push.sh" 2>/dev/null
+    pkill -f "pushplus.sh" 2>/dev/null
+    echo "✓ 推送进程已停止"
+
+    # 移除cron任务（包含 push.sh / traffic 相关，兼容旧脚本残留）
+    crontab -l 2>/dev/null | grep -vE "trafficcop\.sh|traffic_monitor\.sh|push\.sh -cron|tg_push\.sh -cron|pushplus\.sh -cron|tg_notifier|pushplus_notifier" | crontab - 2>/dev/null
     echo "✓ 定时任务已清理"
-    
+
     # 清除TC规则
-    local interface=$(ip route | grep default | awk '{print $5}' | head -n1)
+    local interface
+    interface=$(ip route | grep default | awk '{print $5}' | head -n1)
     if [ -n "$interface" ]; then
         tc qdisc del dev "$interface" root 2>/dev/null
         echo "✓ TC限速规则已清除"
     fi
-    
+
     # 取消关机计划
     shutdown -c 2>/dev/null
     echo "✓ 关机计划已取消"
-    
+
     echo -e "${GREEN}所有服务已停止！${NC}"
     read -p "按回车键继续..."
 }
@@ -213,10 +196,10 @@ stop_all_services() {
 # 更新所有脚本
 update_all_scripts() {
     echo -e "${CYAN}正在更新所有脚本到最新版本...${NC}"
-    
-    local scripts=("trafficcop.sh" "tg_push.sh" "pushplus.sh" "node.sh" 
-)
-    
+
+    # 仅更新仍在使用的脚本；旧的 tg_push.sh / pushplus.sh 不再纳入管理
+    local scripts=("trafficcop.sh" "push.sh" "node.sh")
+
     for script in "${scripts[@]}"; do
         if curl -fsSL "$REPO_URL/$script" -o "$WORK_DIR/$script.new" 2>/dev/null; then
             mv "$WORK_DIR/$script.new" "$WORK_DIR/$script"
@@ -226,18 +209,13 @@ update_all_scripts() {
             echo -e "${YELLOW}! $script 更新失败或不存在${NC}"
         fi
     done
-    
+
     echo -e "${GREEN}脚本更新完成！${NC}"
     read -p "按回车键继续..."
 }
 
 # ============================================
 # 读取当前总流量（与 trafficcop.sh 口径一致：all-time 字段 13/14/15）
-# - 读取 traffic_config.txt（仅解析 KEY=VALUE）
-# - 读取 traffic_offset.dat
-# - vnstat --oneline b 使用 all-time：
-#   in=13 out=14 total=15
-# - 输出统一格式：0.000（始终三位小数）
 # ============================================
 Traffic_all() {
     local config_file="$WORK_DIR/traffic_config.txt"
@@ -295,12 +273,9 @@ Traffic_all() {
     local real_bytes=$((raw_bytes - offset))
     [ "$real_bytes" -lt 0 ] && real_bytes=0
 
-    # ✅ 统一格式：始终输出 3 位小数
     local usage_gb
     usage_gb=$(echo "$real_bytes/1024/1024/1024" | bc -l 2>/dev/null)
     usage_gb=$(printf "%.3f" "${usage_gb:-0}")
-
-    # ✅ 再兜底一次：防止出现 ".355"
     [[ "$usage_gb" == .* ]] && usage_gb="0$usage_gb"
 
     # 周期起始（简化版）
@@ -312,7 +287,7 @@ Traffic_all() {
         monthly)
             if [ "$d" -lt "$PERIOD_START_DAY" ]; then
                 period_start=$(date -d "$y-$m-$PERIOD_START_DAY -1 month" +%Y-%m-%d 2>/dev/null || \
-                               date -d "$y-$(expr "$m" - 1)-$PERIOD_START_DAY" +%Y-%m-%d)
+                               date -d "$y-$m-$PERIOD_START_DAY" +%Y-%m-%d)
             else
                 period_start=$(date -d "$y-$m-$PERIOD_START_DAY" +%Y-%m-%d)
             fi
@@ -346,8 +321,6 @@ Traffic_all() {
 
 # ======================================================
 # 手动设置已用流量（管理脚本版本，口径与 trafficcop.sh 一致）
-# - 使用 vnstat all-time 字段：in=13 out=14 total=15
-# - offset = raw_all_time_bytes - target_bytes
 # ======================================================
 flow_setting() {
     echo "================ 手动修正本周期流量 ================"
@@ -358,7 +331,6 @@ flow_setting() {
     echo "请输入当前本周期实际已使用流量(GB)："
     read -r real_gb
 
-    # 输入校验
     if ! [[ "$real_gb" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
         echo "输入无效，请输入数字，例如 30 或 12.5"
         return 1
@@ -373,7 +345,6 @@ flow_setting() {
         return 1
     fi
 
-    # 只解析 KEY=VALUE，避免中文/空格/杂项导致 source 失败
     # shellcheck disable=SC1090
     source <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$config_file" | sed 's/\r$//') 2>/dev/null || {
         echo "错误：配置加载失败（可能包含非法行）：$config_file"
@@ -388,35 +359,25 @@ flow_setting() {
         return 1
     fi
 
-    # 强制刷新 vnstat 数据库，避免读到旧值
     vnstat -u -i "$MAIN_INTERFACE" >/dev/null 2>&1
 
     local line raw_bytes rx tx target_bytes new_offset
     line=$(vnstat -i "$MAIN_INTERFACE" --oneline b 2>&1 || echo "")
 
-    # vnstat 没数据/未就绪：raw_bytes 按 0 处理（允许写负 offset）
     if echo "$line" | grep -qiE "Not enough data available yet|No data\. Timestamp of last update is same"; then
         raw_bytes=0
     else
-        # 其它异常：必须是包含 ';' 的 oneline 数据
         if [ -z "$line" ] || ! echo "$line" | grep -q ';'; then
             echo "vnstat 输出无效，无法计算 raw_bytes：$line"
             echo "$(date '+%Y-%m-%d %H:%M:%S') flow_setting：vnstat 输出无效($line)，放弃修改 OFFSET_FILE" | tee -a "$log_file"
             return 1
         fi
 
-        # ✅ 关键：使用 all-time 字段（与 trafficcop.sh 一致）
         raw_bytes=0
         case "$TRAFFIC_MODE" in
-            out)
-                raw_bytes=$(echo "$line" | cut -d';' -f14)   # all-time tx
-                ;;
-            in)
-                raw_bytes=$(echo "$line" | cut -d';' -f13)   # all-time rx
-                ;;
-            total)
-                raw_bytes=$(echo "$line" | cut -d';' -f15)   # all-time total
-                ;;
+            out)   raw_bytes=$(echo "$line" | cut -d';' -f14) ;;
+            in)    raw_bytes=$(echo "$line" | cut -d';' -f13) ;;
+            total) raw_bytes=$(echo "$line" | cut -d';' -f15) ;;
             max)
                 rx=$(echo "$line" | cut -d';' -f13)
                 tx=$(echo "$line" | cut -d';' -f14)
@@ -425,9 +386,7 @@ flow_setting() {
                 [[ "$tx" =~ ^[0-9]+$ ]] || tx=0
                 raw_bytes=$((rx > tx ? rx : tx))
                 ;;
-            *)
-                raw_bytes=$(echo "$line" | cut -d';' -f15)
-                ;;
+            *) raw_bytes=$(echo "$line" | cut -d';' -f15) ;;
         esac
     fi
 
@@ -438,15 +397,11 @@ flow_setting() {
         return 1
     fi
 
-    # real_gb -> bytes（1024^3）
     target_bytes=$(echo "$real_gb * 1024 * 1024 * 1024" | bc 2>/dev/null | cut -d'.' -f1)
     target_bytes=${target_bytes:-0}
     [[ "$target_bytes" =~ ^[0-9]+$ ]] || target_bytes=0
 
-    # offset = 当前 all-time 累计 - 目标本周期用量
-    # 后续显示：已用 = 当前 all-time - offset ≈ real_gb
     new_offset=$((raw_bytes - target_bytes))
-
     echo "$new_offset" > "$offset_file"
 
     echo "--------------------------------------"
@@ -457,14 +412,15 @@ flow_setting() {
     echo "（后续统计：已用 = 当前累计 - offset，将从 ${real_gb}GB 附近开始往上增长）"
     echo "--------------------------------------"
     echo "$(date '+%Y-%m-%d %H:%M:%S') flow_setting：手动设置 OFFSET_FILE=$new_offset（对应本周期已用 $real_gb GB）" | tee -a "$log_file"
-
     return 0
 }
+
 # ======================================================
 # IP 域名禁止访问功能
 # ======================================================
 ip_ban() {
     echo -e "${CYAN} 待开发...${NC}"
+    read -p "按回车键继续..."
 }
 
 # ======================================================
@@ -474,13 +430,11 @@ install_node() {
     echo -e "${CYAN}正在安装 node 监控脚本...${NC}"
 
     local file="node.sh"
-    local url="https://raw.githubusercontent.com/byilrq/TrafficCop/main/node.sh"
+    local url="$REPO_URL/$file"
     local dest="$WORK_DIR/$file"
 
     echo -e "${BLUE}➡ 下载 node.sh ...${NC}"
-    curl -fsSL "$url" -o "$dest"
-
-    if [[ $? -ne 0 ]]; then
+    if ! curl -fsSL "$url" -o "$dest"; then
         echo -e "${RED}❌ 下载失败，请检查网络或 GitHub 链接。${NC}"
         read -p "按回车继续..."
         return
@@ -505,12 +459,12 @@ show_main_menu() {
     echo -e "${PURPLE}====================================${NC}"
     echo ""
     echo -e "${YELLOW}1) 安装/管理流量监控${NC}"
-    echo -e "${YELLOW}2) 安装/管理Telegram通知${NC}"
-    echo -e "${YELLOW}3) 安装/管理PushPlus通知${NC}"
-    echo -e "${YELLOW}4) 安装/管理node监控${NC}"  
+    echo -e "${YELLOW}2) 安装/管理推送通知（push.sh：TG/PushPlus）${NC}"
+    echo -e "${YELLOW}3) 查看日志${NC}"
+    echo -e "${YELLOW}4) 安装/管理node监控${NC}"
     echo -e "${YELLOW}5) 查看配置${NC}"
-    echo -e "${YELLOW}6) 实时流量${NC}" 
-    echo -e "${YELLOW}7) 补偿流量${NC}" 
+    echo -e "${YELLOW}6) 实时流量${NC}"
+    echo -e "${YELLOW}7) 补偿流量${NC}"
     echo -e "${RED}8) 停止服务${NC}"
     echo -e "${BLUE}9) 更新脚本${NC}"
     echo -e "${BLUE}10) 备用${NC}"
@@ -523,33 +477,35 @@ show_main_menu() {
 main() {
     check_root
     create_work_dir
-    
+
     while true; do
         show_main_menu
         read -p "请选择操作 [0-10]: " choice
-        
+
         case $choice in
             1)
                 install_monitor
                 ;;
             2)
-                install_tg_notifier
+                install_push_manager
                 ;;
             3)
-                install_pushplus
+                view_logs
                 ;;
             4)
                 install_node
-                ;;                  
+                ;;
             5)
                 view_config
                 ;;
             6)
                 Traffic_all
-                ;;    
+                read -p "按回车键继续..."
+                ;;
             7)
                 flow_setting
-                ;;              
+                read -p "按回车键继续..."
+                ;;
             8)
                 stop_all_services
                 ;;
