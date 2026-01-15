@@ -1,18 +1,11 @@
 #!/bin/bash
 # ============================================
-# Push - Telegram / PushPlus 流量监控通知脚本（合并版）
+# 流量监控通知脚本（合并版）
 # 文件名：/root/TrafficCop/push.sh
-# 版本：2026-01-15 (Fix: Telegram HTML <br> unsupported)
-#
+# 版本：2026-01-15 
 # 支持两种流量来源：
 #   1) vnstat（本机网卡口径，支持 offset 校准；周期按 TrafficCop 配置）
 #   2) bwh_api（KiwiVM 面板口径；周期按 data_next_reset 推算）
-#
-# 支持两种推送渠道（可二选一，也可同时启用）：
-#   1) Telegram（TG_BOT_TOKEN + TG_CHAT_ID）
-#   2) PushPlus（PUSHPLUS_TOKEN + PUSHPLUS_TOPIC 可选）
-#
-# 依赖：curl / jq / bc / iproute2（vnstat 模式需要 vnstat）
 # ============================================
 
 export TZ='Asia/Shanghai'
