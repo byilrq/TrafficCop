@@ -475,16 +475,7 @@ daily_report() {
 }
 
 
-get_current_traffic() {
-    local out plain
-    out=$(build_report) || { echo "生成报告失败（请检查配置/依赖）"; return 1; }
-    plain=$(echo "$out" | sed -n '2p')
-    echo "========================================"
-    echo "       实时流量信息"
-    echo "========================================"
-    echo -e "$plain"
-    echo "========================================"
-}
+
 
 flow_setting() {
     echo "（仅 vnstat 模式可用）请输入本周期实际已用流量（GiB）:"
@@ -741,10 +732,9 @@ main() {
         echo -e "${BLUE}======================================${PLAIN}"
         echo -e "${GREEN}1.${PLAIN} 发送${YELLOW}每日报告${PLAIN}"
         echo -e "${GREEN}2.${PLAIN} 发送${CYAN}测试消息${PLAIN}"
-        echo -e "${GREEN}3.${PLAIN} 打印${YELLOW}实时流量${PLAIN}"
-        echo -e "${GREEN}4.${PLAIN} 修改${PURPLE}配置（渠道/流量来源/API）${PLAIN}"
-        echo -e "${GREEN}5.${PLAIN} 修正${YELLOW}vnstat offset${PLAIN}（仅 vnstat 模式）"
-        echo -e "${RED}6.${PLAIN} 移除定时任务${PLAIN}"
+        echo -e "${GREEN}3.${PLAIN} 修改${PURPLE}配置（渠道/流量来源/API）${PLAIN}"
+        echo -e "${GREEN}4.${PLAIN} 修正${YELLOW}vnstat offset${PLAIN}（仅 vnstat 模式）"
+        echo -e "${RED}5.${PLAIN} 移除定时任务${PLAIN}"
         echo -e "${WHITE}0.${PLAIN} 退出${PLAIN}"
         echo -e "${BLUE}======================================${PLAIN}"
         read -rp "请选择操作 [0-6]: " choice
@@ -752,16 +742,15 @@ main() {
         case "$choice" in
             1) daily_report ;;
             2) test_push ;;
-            3) get_current_traffic ;;
-            4) initial_config ;;
-            5)
+            3) initial_config ;;
+            4)
                 if [[ "${TRAFFIC_SOURCE:-vnstat}" == "vnstat" ]]; then
                     flow_setting
                 else
                     echo "当前为 bwh_api 模式，不需要 offset 修正。"
                 fi
                 ;;
-            6) stop_service ;;
+            5) stop_service ;;
             0) exit 0 ;;
             *) echo "无效选项，请重新输入" ;;
         esac
