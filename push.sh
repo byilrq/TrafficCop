@@ -301,6 +301,7 @@ build_report() {
         disk_line="未知"
     fi
 
+    # 周期兜底
     if read_traffic_config; then
         start=$(get_period_start_date)
         end=$(get_period_end_date "$start")
@@ -330,8 +331,8 @@ build_report() {
 
     local title="🎯 [${MACHINE_NAME}] 流量统计"
 
-    local text_plain
-    text_plain="${title}
+    # 纯文本（用于终端显示、PushPlus 也可用）
+    local text_plain="${title}
 
 🕒日期：${today}
 ${remain_emoji}剩余：${diff_days}天
@@ -341,20 +342,18 @@ ${remain_emoji}剩余：${diff_days}天
 💾空间：${disk_line}
 "
 
-    # Telegram HTML：不使用 <br>，换行用 \n
-    local tg_html
-    tg_html="<b>${title}</b>
-
+    # Telegram-safe HTML：只保留<b>，不用<br>，用换行符
+    local text_tg_html="<b>${title}</b>
 🕒日期：${today}
 ${remain_emoji}剩余：${diff_days}天
 🔄周期：${start} 到 ${end}
 ⌛已用：${usage} GB
 🌐套餐：${limit}
-💾空间：${disk_line}"
+💾空间：${disk_line}
+"
 
-    # PushPlus 继续使用 <br>（PushPlus 的 html 模板支持）
-    local pp_html
-    pp_html="<b>${title}</b><br><br>
+    # PushPlus HTML：使用<br>
+    local text_pp_html="<b>${title}</b><br><br>
 🕒日期：${today}<br>
 ${remain_emoji}剩余：${diff_days}天<br>
 🔄周期：${start} 到 ${end}<br>
@@ -363,10 +362,11 @@ ${remain_emoji}剩余：${diff_days}天<br>
 💾空间：${disk_line}
 "
 
-    # 输出四行：title / plain / tg_html / pushplus_html
-    printf "%s\n%s\n%s\n%s\n" "$title" "$text_plain" "$tg_html" "$pp_html"
-    return 0
+    # 用分隔符输出三段，避免 sed 取行断裂
+    printf "%s\n__SPLIT__\n%s\n__SPLIT__\n%s\n__SPLIT__\n%s\n" \
+        "$title" "$text_plain" "$text_tg_html" "$text_pp_html"
 }
+
 
 tg_send() {
     local html="$1"
@@ -421,7 +421,6 @@ test_push() {
     local title="🖥️ [${MACHINE_NAME}] 测试消息"
     local plain="${title}\n\n这是一条测试消息，如果您收到此推送，说明配置正常！"
     local tg_html="<b>${title}</b>
-
 这是一条测试消息，如果您收到此推送，说明配置正常！"
     local pp_html="<b>${title}</b><br><br>这是一条测试消息，如果您收到此推送，说明配置正常！"
 
@@ -441,30 +440,40 @@ test_push() {
     echo -e "$plain"
 }
 
+
 daily_report() {
     local out title plain tg_html pp_html
     out=$(build_report) || { log_cron "生成报告失败（流量来源/配置/依赖异常）"; return 1; }
 
-    title=$(echo "$out" | sed -n '1p')
-    plain=$(echo "$out" | sed -n '2p')
-    tg_html=$(echo "$out" | sed -n '3p')
-    pp_html=$(echo "$out" | sed -n '4p')
+    title=$(echo "$out" | awk 'BEGIN{RS="__SPLIT__"; ORS=""} NR==1{print}' | sed 's/\n$//')
+    plain=$(echo "$out" | awk 'BEGIN{RS="__SPLIT__"; ORS=""} NR==2{print}' | sed 's/\n$//')
+    tg_html=$(echo "$out" | awk 'BEGIN{RS="__SPLIT__"; ORS=""} NR==3{print}' | sed 's/\n$//')
+    pp_html=$(echo "$out" | awk 'BEGIN{RS="__SPLIT__"; ORS=""} NR==4{print}' | sed 's/\n$//')
 
     case "$PUSH_CHANNEL" in
         tg)
-            if tg_send "$tg_html"; then log_cron "Telegram 推送成功"; else log_cron "Telegram 推送失败"; fi
+            if tg_send "$tg_html"; then
+                log_cron "Telegram 推送成功"
+            else
+                log_cron "Telegram 推送失败"
+            fi
             ;;
         pushplus)
-            if pushplus_send "$title" "$pp_html"; then log_cron "PushPlus 推送成功"; else log_cron "PushPlus 推送失败"; fi
+            if pushplus_send "$title" "$pp_html"; then
+                log_cron "PushPlus 推送成功"
+            else
+                log_cron "PushPlus 推送失败"
+            fi
             ;;
         both)
-            if tg_send "$tg_html"; then log_cron "Telegram 推送成功"; else log_cron "Telegram 推送失败"; fi
-            if pushplus_send "$title" "$pp_html"; then log_cron "PushPlus 推送成功"; else log_cron "PushPlus 推送失败"; fi
+            tg_send "$tg_html" && log_cron "Telegram 推送成功" || log_cron "Telegram 推送失败"
+            pushplus_send "$title" "$pp_html" && log_cron "PushPlus 推送成功" || log_cron "PushPlus 推送失败"
             ;;
     esac
 
     echo -e "$plain"
 }
+
 
 get_current_traffic() {
     local out plain
