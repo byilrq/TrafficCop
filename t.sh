@@ -217,7 +217,93 @@ update_all_scripts() {
 # ============================================
 # 读取当前总流量（与 trafficcop.sh 口径一致：all-time 字段 13/14/15）
 # ============================================
+# ============================================
+# Traffic_all 扩展版：
+# - 默认走 vnstat（保持原逻辑）
+# - 若 push_config.txt 中 TRAFFIC_SOURCE="bwh_api"，则读取 KiwiVM API 的 data_counter
+# ============================================
+
+# --- 读取 push_config.txt（仅解析 KEY=VALUE） ---
+_read_push_config_kv() {
+    local push_cfg="$WORK_DIR/push_config.txt"
+    [ -s "$push_cfg" ] || return 1
+    # shellcheck disable=SC1090
+    source <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$push_cfg" | sed 's/\r$//') 2>/dev/null || return 1
+    return 0
+}
+
+# --- KiwiVM API：输出 used_bytes plan_bytes next_reset ---
+_get_bwh_info_bytes() {
+    local endpoint="$1" veid="$2" api_key="$3"
+    local json err used_bytes plan_bytes next_reset
+
+    json=$(curl -fsS -G "$endpoint" \
+        --data-urlencode "veid=$veid" \
+        --data-urlencode "api_key=$api_key" 2>/dev/null) || return 1
+
+    err=$(echo "$json" | jq -r '.error // 1' 2>/dev/null)
+    [[ "$err" == "0" ]] || return 1
+
+    used_bytes=$(echo "$json" | jq -r '.data_counter // empty' 2>/dev/null)
+    plan_bytes=$(echo "$json" | jq -r '.plan_monthly_data // empty' 2>/dev/null)
+    next_reset=$(echo "$json" | jq -r '.data_next_reset // empty' 2>/dev/null)
+
+    [[ "$used_bytes" =~ ^[0-9]+$ ]] || return 1
+    [[ "$plan_bytes" =~ ^[0-9]+$ ]] || plan_bytes=0
+    [[ "$next_reset" =~ ^[0-9]+$ ]] || next_reset=0
+
+    echo "$used_bytes $plan_bytes $next_reset"
+    return 0
+}
+
 Traffic_all() {
+    local push_cfg="$WORK_DIR/push_config.txt"
+
+    # 1) 先看 push_config 的流量来源（缺失则默认 vnstat）
+    local TRAFFIC_SOURCE="vnstat"
+    local BWH_VEID="" BWH_API_KEY="" BWH_API_ENDPOINT=""
+    local BWH_API_ENDPOINT_DEFAULT="https://api.64clouds.com/v1/getServiceInfo"
+
+    if _read_push_config_kv; then
+        TRAFFIC_SOURCE=${TRAFFIC_SOURCE:-vnstat}
+        BWH_VEID=${BWH_VEID:-}
+        BWH_API_KEY=${BWH_API_KEY:-}
+        BWH_API_ENDPOINT=${BWH_API_ENDPOINT:-$BWH_API_ENDPOINT_DEFAULT}
+    else
+        TRAFFIC_SOURCE="vnstat"
+    fi
+
+    # 2) bwh_api 路径：不依赖 traffic_config.txt，不走 offset
+    if [[ "$TRAFFIC_SOURCE" == "bwh_api" ]]; then
+        if [[ -z "$BWH_VEID" || -z "$BWH_API_KEY" ]]; then
+            echo -e "${RED}push_config.txt 未配置 BWH_VEID / BWH_API_KEY，无法读取 bwh_api 流量。${NC}"
+            echo -e "${YELLOW}请在 push.sh 菜单 4 完成 bwh_api 配置后再试。${NC}"
+            return 1
+        fi
+
+        local info used_bytes plan_bytes next_reset
+        info=$(_get_bwh_info_bytes "$BWH_API_ENDPOINT" "$BWH_VEID" "$BWH_API_KEY") || {
+            echo -e "${RED}KiwiVM API 调用失败：请检查网络、VEID/API_KEY、Endpoint。${NC}"
+            return 1
+        }
+
+        used_bytes=$(echo "$info" | awk '{print $1}')
+        plan_bytes=$(echo "$info" | awk '{print $2}')
+        next_reset=$(echo "$info" | awk '{print $3}')
+
+        # bytes -> GB（GiB）
+        local used_gb plan_gb
+        used_gb=$(awk "BEGIN{printf \"%.3f\", $used_bytes/1024/1024/1024}")
+        plan_gb=$(awk "BEGIN{printf \"%.3f\", $plan_bytes/1024/1024/1024}")
+
+        echo "$(date '+%Y-%m-%d %H:%M:%S') 流量来源: bwh_api（KiwiVM）"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') 当前流量使用: ${used_gb} GB"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') 套餐总量: ${plan_gb} GB"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') DEBUG: used_bytes=${used_bytes} plan_bytes=${plan_bytes} next_reset=${next_reset} veid=${BWH_VEID}"
+        return 0
+    fi
+
+    # 3) vnstat 路径：保持你原来的逻辑（依赖 traffic_config.txt + offset）
     local config_file="$WORK_DIR/traffic_config.txt"
     local offset_file="$WORK_DIR/traffic_offset.dat"
 
@@ -227,7 +313,6 @@ Traffic_all() {
         return 1
     fi
 
-    # 只解析 KEY=VALUE，避免中文/空格/杂项导致 source 失败
     # shellcheck disable=SC1090
     source <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$config_file" | sed 's/\r$//') 2>/dev/null || {
         echo -e "${RED}配置加载失败（可能包含非法行）：$config_file${NC}"
@@ -313,11 +398,13 @@ Traffic_all() {
         *) period_start=$(date -d "$y-$m-${PERIOD_START_DAY:-1}" +%Y-%m-%d) ;;
     esac
 
+    echo "$(date '+%Y-%m-%d %H:%M:%S') 流量来源: vnstat（本机口径）"
     echo "$(date '+%Y-%m-%d %H:%M:%S') 当前周期: ${period_start} 起（按 $TRAFFIC_PERIOD 统计）"
     echo "$(date '+%Y-%m-%d %H:%M:%S') 统计模式: $TRAFFIC_MODE"
     echo "$(date '+%Y-%m-%d %H:%M:%S') 当前流量使用: $usage_gb GB"
     echo "$(date '+%Y-%m-%d %H:%M:%S') DEBUG: raw_bytes(all-time)=$raw_bytes offset=$offset real_bytes=$real_bytes iface=$MAIN_INTERFACE"
 }
+
 
 # ======================================================
 # 手动设置已用流量（管理脚本版本，口径与 trafficcop.sh 一致）
@@ -459,7 +546,7 @@ show_main_menu() {
     echo -e "${PURPLE}====================================${NC}"
     echo ""
     echo -e "${YELLOW}1) 安装/管理流量监控${NC}"
-    echo -e "${YELLOW}2) 安装/管理推送通知（push.sh：TG/PushPlus）${NC}"
+    echo -e "${YELLOW}2) 安装/管理推送通知${NC}"
     echo -e "${YELLOW}3) 查看日志${NC}"
     echo -e "${YELLOW}4) 安装/管理node监控${NC}"
     echo -e "${YELLOW}5) 查看配置${NC}"
