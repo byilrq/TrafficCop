@@ -65,48 +65,6 @@ install_push_manager() {
     read -p "按回车键继续..."
 }
 
-# 查看日志
-view_logs() {
-    echo -e "${CYAN}查看日志${NC}"
-    echo "1) 流量监控日志"
-    echo "2) 推送日志（push.sh）"
-    echo "0) 返回主菜单"
-
-    read -p "请选择要查看的日志 [0-2]: " log_choice
-
-    case $log_choice in
-        1)
-            if [ -f "$WORK_DIR/traffic_monitor.log" ]; then
-                echo -e "${YELLOW}====== 最近 50 条 流量监控日志 ======${NC}"
-                tail -50 "$WORK_DIR/traffic_monitor.log"
-            elif [ -f "$WORK_DIR/traffic.log" ]; then
-                echo -e "${YELLOW}====== 最近 50 条 流量监控日志（traffic.log） ======${NC}"
-                tail -50 "$WORK_DIR/traffic.log"
-            else
-                echo -e "${RED}流量监控日志不存在${NC}"
-                echo -e "（预期位置: $WORK_DIR/traffic_monitor.log 或 $WORK_DIR/traffic.log）"
-            fi
-            ;;
-        2)
-            if [ -f "$WORK_DIR/push_cron.log" ]; then
-                echo -e "${YELLOW}====== 最近 50 条 推送日志（push.sh） ======${NC}"
-                tail -50 "$WORK_DIR/push_cron.log"
-            else
-                echo -e "${RED}推送日志不存在${NC}"
-                echo -e "（预期位置: $WORK_DIR/push_cron.log）"
-            fi
-            ;;
-        0)
-            return
-            ;;
-        *)
-            echo -e "${RED}无效的选择${NC}"
-            ;;
-    esac
-
-    read -p "按回车键继续..."
-}
-
 # 查看当前配置
 view_config() {
     echo -e "${CYAN}查看当前配置${NC}"
@@ -502,13 +460,6 @@ flow_setting() {
     return 0
 }
 
-# ======================================================
-# IP 域名禁止访问功能
-# ======================================================
-ip_ban() {
-    echo -e "${CYAN} 待开发...${NC}"
-    read -p "按回车键继续..."
-}
 
 # ======================================================
 # 安装 / 管理 node 监控通知
@@ -547,14 +498,12 @@ show_main_menu() {
     echo ""
     echo -e "${YELLOW}1) 安装/管理流量监控${NC}"
     echo -e "${YELLOW}2) 安装/管理推送通知${NC}"
-    echo -e "${YELLOW}3) 查看日志${NC}"
-    echo -e "${YELLOW}4) 安装/管理node监控${NC}"
-    echo -e "${YELLOW}5) 查看配置${NC}"
-    echo -e "${YELLOW}6) 实时流量${NC}"
-    echo -e "${YELLOW}7) 补偿流量${NC}"
-    echo -e "${RED}8) 停止服务${NC}"
-    echo -e "${BLUE}9) 更新脚本${NC}"
-    echo -e "${BLUE}10) 备用${NC}"
+    echo -e "${YELLOW}3) 安装/管理node监控${NC}"
+    echo -e "${YELLOW}4) 查看配置${NC}"
+    echo -e "${YELLOW}5) 实时流量${NC}"
+    echo -e "${YELLOW}6) 补偿流量${NC}"
+    echo -e "${RED}7) 停止服务${NC}"
+    echo -e "${BLUE}8) 更新脚本${NC}"
     echo -e "${YELLOW}0) 退出${NC}"
     echo -e "${PURPLE}====================================${NC}"
     echo ""
@@ -567,7 +516,7 @@ main() {
 
     while true; do
         show_main_menu
-        read -p "请选择操作 [0-10]: " choice
+        read -p "请选择操作 [0-8]: " choice
 
         case $choice in
             1)
@@ -577,30 +526,24 @@ main() {
                 install_push_manager
                 ;;
             3)
-                view_logs
-                ;;
-            4)
                 install_node
                 ;;
-            5)
+            4)
                 view_config
                 ;;
-            6)
+            5)
                 Traffic_all
                 read -p "按回车键继续..."
                 ;;
-            7)
+            6)
                 flow_setting
                 read -p "按回车键继续..."
                 ;;
-            8)
+            7)
                 stop_all_services
                 ;;
-            9)
+            8)
                 update_all_scripts
-                ;;
-            10)
-                ip_ban
                 ;;
             0)
                 echo -e "${GREEN}感谢使用TrafficCop管理工具！${NC}"
