@@ -128,16 +128,16 @@ initial_config() {
     # --- 监控间隔（秒）---
     echo ""
     if [ -n "$INTERVAL_SEC" ]; then
-        read -rp "请输入监控间隔秒数 [当前: $INTERVAL_SEC]（建议>=20，最低10）: " new_interval
+        read -rp "请输入监控间隔秒数 [当前: $INTERVAL_SEC]（建议>=20，最低15）: " new_interval
         [[ -z "$new_interval" ]] && new_interval="$INTERVAL_SEC"
     else
         read -rp "请输入监控间隔秒数 [默认: 30]（建议>=20，最低15）: " new_interval
-        [[ -z "$new_interval" ]] && new_interval="30"
+        [[ -z "$new_interval" ]] && new_interval="20"
     fi
 
-    # ✅ 校验：必须是数字，最低允许 10 秒
+    # ✅ 校验：必须是数字，最低允许 15 秒
     if ! [[ "$new_interval" =~ ^[0-9]+$ ]]; then
-        new_interval="30"
+        new_interval="20"
     fi
     if (( new_interval < 15 )); then
         new_interval="15"
