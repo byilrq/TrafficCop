@@ -128,19 +128,19 @@ initial_config() {
     # --- 监控间隔（秒）---
     echo ""
     if [ -n "$INTERVAL_SEC" ]; then
-        read -rp "请输入监控间隔秒数 [当前: $INTERVAL_SEC]（建议>=60，最低20）: " new_interval
+        read -rp "请输入监控间隔秒数 [当前: $INTERVAL_SEC]（建议>=20，最低10）: " new_interval
         [[ -z "$new_interval" ]] && new_interval="$INTERVAL_SEC"
     else
-        read -rp "请输入监控间隔秒数 [默认: 180]（建议>=60，最低20）: " new_interval
-        [[ -z "$new_interval" ]] && new_interval="180"
+        read -rp "请输入监控间隔秒数 [默认: 30]（建议>=20，最低15）: " new_interval
+        [[ -z "$new_interval" ]] && new_interval="30"
     fi
 
-    # ✅ 校验：必须是数字，最低允许 20 秒
+    # ✅ 校验：必须是数字，最低允许 10 秒
     if ! [[ "$new_interval" =~ ^[0-9]+$ ]]; then
-        new_interval="180"
+        new_interval="30"
     fi
-    if (( new_interval < 20 )); then
-        new_interval="20"
+    if (( new_interval < 15 )); then
+        new_interval="15"
     fi
     INTERVAL_SEC="$new_interval"
 
@@ -712,10 +712,10 @@ if [[ "$1" == "-cron" ]]; then
     read_config >/dev/null 2>&1 || true
     INTERVAL=${INTERVAL_SEC:-180}
     if ! [[ "$INTERVAL" =~ ^[0-9]+$ ]]; then
-        INTERVAL=180
+        INTERVAL=30
     fi
-    if (( INTERVAL < 20 )); then
-        INTERVAL=20
+    if (( INTERVAL < 15 )); then
+        INTERVAL=15
     fi
 
     echo "$(date '+%Y-%m-%d %H:%M:%S') 🚀 定时任务已启动（每${INTERVAL}秒执行 manual_fresh + auto_push）" >> "$CRON_LOG"
