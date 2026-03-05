@@ -1,11 +1,7 @@
 #!/bin/bash
 # ============================================
-# Node 最新帖子监控脚本
-# 更新时间：2025-12-21
-# 修复点：
-# 1) 不再依赖 gawk 的 PROCINFO["sorted_in"] 排序（Debian 常见 awk=mawk 会乱序）
-#    -> 统一用 sort -n -t'|' -k1,1 做稳定排序
-# 2) -cron 是常驻 while true 进程：修改脚本后务必 stop_cron 再启动，否则老进程仍用旧逻辑写文件
+# Node 
+#  -cron 是常驻 while true 进程：修改脚本后务必 stop_cron 再启动，否则老进程仍用旧逻辑写文件
 # ============================================
 
 export LANG=C.UTF-8
@@ -82,7 +78,7 @@ tg_send() {
 # ============================================
 initial_config() {
     echo -e "${BLUE}======================================${PLAIN}"
-    echo -e "${PURPLE} node 最新帖子监控 配置向导${PLAIN}"
+    echo -e "${PURPLE} node 新帖监控 配置向导${PLAIN}"
     echo -e "${BLUE}======================================${PLAIN}"
     echo ""
     echo "提示：按 Enter 保留当前配置，输入新值将覆盖原配置。"
@@ -118,10 +114,10 @@ initial_config() {
     # --- node RSS URL ---
     local default_url="https://rss.nodeseek.com/?sortBy=postTime"
     if [ -n "$NS_URL" ]; then
-        read -rp "请输入要监控的 node RSS URL [当前: $NS_URL] (回车默认最新帖): " new_url
+        read -rp "请输入要监控的 RSS URL [当前: $NS_URL] (回车默认最新帖): " new_url
         [[ -z "$new_url" ]] && new_url="$NS_URL"
     else
-        read -rp "请输入要监控的 node RSS URL [默认: $default_url]: " new_url
+        read -rp "请输入要监控的 RSS URL [默认: $default_url]: " new_url
         [[ -z "$new_url" ]] && new_url="$default_url"
     fi
 
