@@ -36,7 +36,7 @@ read_config() {
     source "$CONFIG_FILE"
 
     # 兼容旧配置：没写就默认 180 秒
-    [[ -z "$INTERVAL_SEC" ]] && INTERVAL_SEC=180
+    [[ -z "$INTERVAL_SEC" ]] && INTERVAL_SEC=20
 
     if [ -z "$TG_BOT_TOKEN" ] || [ -z "$TG_PUSH_CHAT_ID" ] || [ -z "$NS_URL" ]; then
         echo -e "${RED}❌ 配置不完整（需 TG_BOT_TOKEN / TG_PUSH_CHAT_ID / NS_URL），请重新配置。${PLAIN}"
@@ -127,7 +127,7 @@ initial_config() {
         read -rp "请输入监控间隔秒数 [当前: $INTERVAL_SEC]（建议>=20，最低15）: " new_interval
         [[ -z "$new_interval" ]] && new_interval="$INTERVAL_SEC"
     else
-        read -rp "请输入监控间隔秒数 [默认: 30]（建议>=20，最低15）: " new_interval
+        read -rp "请输入监控间隔秒数 [默认: 20]（建议>=20，最低15）: " new_interval
         [[ -z "$new_interval" ]] && new_interval="20"
     fi
 
@@ -706,7 +706,7 @@ if [[ "$1" == "-cron" ]]; then
     flock -n 200 || exit 0
 
     read_config >/dev/null 2>&1 || true
-    INTERVAL=${INTERVAL_SEC:-180}
+    INTERVAL=${INTERVAL_SEC:-20}
     if ! [[ "$INTERVAL" =~ ^[0-9]+$ ]]; then
         INTERVAL=30
     fi
