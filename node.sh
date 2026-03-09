@@ -458,7 +458,7 @@ manual_fresh() {
 
     rm -f "$NP_FILE"
 
-    echo "$(date '+%Y-%m-%d %H:%M:%S') [node] ✅ 缓存更新完成（严格去重，保留sent标记，稳定排序，最新200条）" >> "$LOG_FILE"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [node] ✅ 缓存更新完成" >> "$LOG_FILE"
 }
 
 # ============================================
@@ -723,7 +723,7 @@ if [[ "$1" == "-cron" ]]; then
 
         trim_file() {
             local file="$1"
-            local max_lines=200
+            local max_lines=60
             [[ -f "$file" ]] || return
             local cnt
             cnt=$(wc -l < "$file")
