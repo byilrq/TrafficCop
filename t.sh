@@ -467,22 +467,39 @@ flow_setting() {
 install_node() {
     echo -e "${CYAN}正在安装 node 监控脚本...${NC}"
 
-    local file="node.sh"
-    local url="$REPO_URL/$file"
-    local dest="$WORK_DIR/$file"
-
-    echo -e "${BLUE}➡ 下载 node.sh ...${NC}"
-    if ! curl -fsSL "$url" -o "$dest"; then
-        echo -e "${RED}❌ 下载失败，请检查网络或 GitHub 链接。${NC}"
+    # 定义需要下载的文件列表
+    local files=(
+        "node.sh"
+        "deploy_node_python.sh"
+        "node_monitor.py"
+    )
+    
+    local download_failed=0
+    
+    # 循环下载每个文件
+    for file in "${files[@]}"; do
+        local url="$REPO_URL/$file"
+        local dest="$WORK_DIR/$file"
+        
+        echo -e "${BLUE}➡ 下载 $file ...${NC}"
+        if ! curl -fsSL "$url" -o "$dest"; then
+            echo -e "${RED}❌ 下载 $file 失败，请检查网络或 GitHub 链接。${NC}"
+            download_failed=1
+        else
+            chmod +x "$dest"
+            echo -e "${GREEN}✔ $file 安装完成${NC}"
+        fi
+    done
+    
+    # 检查是否有下载失败
+    if [ $download_failed -eq 1 ]; then
+        echo -e "${RED}❌ 部分文件下载失败，请检查网络连接后重试。${NC}"
         read -p "按回车继续..."
         return
     fi
 
-    chmod +x "$dest"
-    echo -e "${GREEN}✔ node.sh 安装完成${NC}"
-
     echo -e "${CYAN}➡ 运行 node 配置管理...${NC}"
-    bash "$dest"
+    bash "$WORK_DIR/node.sh"
 
     echo -e "${GREEN}✔ node 监控功能已启动！${NC}"
     read -p "按回车继续..."
