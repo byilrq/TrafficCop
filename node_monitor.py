@@ -35,7 +35,7 @@ LOCK_FILE = WORK_DIR / ".node_python.lock"
 LOG_RESET_FILE = WORK_DIR / ".log_last_reset_day"
 
 DEFAULT_URL = "https://rss.nodeseek.com/?sortBy=postTime"
-MAX_STATE_ENTRIES = 200
+MAX_STATE_ENTRIES = 30
 MATCH_WINDOW = 30
 MANUAL_PUSH_WINDOW = 20
 HTTP_TIMEOUT = 10
@@ -567,7 +567,7 @@ class NodeMonitor:
             for path in (LOG_FILE, CRON_LOG):
                 path.write_text("", encoding="utf-8")
             LOG_RESET_FILE.write_text(today, encoding="utf-8")
-        for path, max_lines in ((LOG_FILE, 60), (CRON_LOG, 60), (LAST_NODE_TXT, 200)):
+        for path, max_lines in ((LOG_FILE, 60), (CRON_LOG, 60), (LAST_NODE_TXT, 30)):
             if not path.exists():
                 continue
             try:
